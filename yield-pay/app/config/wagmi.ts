@@ -1,0 +1,148 @@
+import { http, createConfig, type Transport } from 'wagmi'
+import {
+  mainnet,
+  polygon,
+  optimism,
+  arbitrum,
+  base,
+  arbitrumNova,
+  avalanche,
+  bsc,
+  celo,
+  cronos,
+  fantom,
+  fuse,
+  gnosis,
+  linea,
+  mantle,
+  metis,
+  moonbeam,
+  moonriver,
+  zkSync,
+  scroll,
+  blast,
+  mode,
+  berachain,
+  sonic,
+  unichain,
+  fraxtal,
+  immutableZkEvm,
+  bob,
+  aurora,
+  xdc,
+  flare,
+  telos,
+  viction,
+  taiko,
+  abstract,
+  etherlink,
+  evmos,
+  gravity,
+  hemi,
+  hyperEvm,
+  ink,
+  klaytn,
+  lens,
+  lisk,
+  megaeth,
+  monad,
+  morph,
+  opBNB,
+  plumeMainnet,
+  polygonZkEvm,
+  rootstock,
+  superposition,
+  swellchain,
+  vana,
+  velas,
+  worldchain,
+  xLayer,
+} from 'wagmi/chains'
+import { coinbaseWallet, injected, walletConnect } from 'wagmi/connectors'
+
+const projectId = process.env.NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID
+
+if (!projectId) {
+  throw new Error('NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID is not set')
+}
+
+// 53 Major EVM chains supported by LI.FI - focused on mainnets for hackathon
+const supportedChains = [
+  // Ethereum ecosystem core
+  mainnet,
+  polygon,
+  arbitrum,
+  optimism,
+  base,
+  arbitrumNova,
+  // Major L2s & Alt-L1s
+  avalanche,
+  bsc,
+  celo,
+  cronos,
+  fantom,
+  fuse,
+  gnosis,
+  linea,
+  mantle,
+  metis,
+  moonbeam,
+  moonriver,
+  zkSync,
+  scroll,
+  // Emerging L2s
+  blast,
+  mode,
+  berachain,
+  sonic,
+  unichain,
+  fraxtal,
+  immutableZkEvm,
+  // Other chains
+  bob,
+  aurora,
+  xdc,
+  flare,
+  telos,
+  viction,
+  taiko,
+  abstract,
+  etherlink,
+  evmos,
+  gravity,
+  hemi,
+  hyperEvm,
+  ink,
+  klaytn,
+  lens,
+  lisk,
+  megaeth,
+  monad,
+  morph,
+  opBNB,
+  plumeMainnet,
+  polygonZkEvm,
+  rootstock,
+  superposition,
+  swellchain,
+  vana,
+  velas,
+  worldchain,
+  xLayer,
+] as const
+
+export const config = createConfig({
+  chains: supportedChains,
+  connectors: [
+    injected(),
+    coinbaseWallet({ appName: 'Yield-Pay' }),
+    walletConnect({ projectId }),
+  ],
+  transports: Object.fromEntries(
+    supportedChains.map((chain) => [chain.id, http()])
+  ) as unknown as Record<SupportedChainId, Transport>,
+})
+
+export { supportedChains }
+
+export type SupportedChainId = (typeof supportedChains)[number]['id']

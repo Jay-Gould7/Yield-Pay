@@ -1,36 +1,23 @@
-import type { Metadata } from 'next'
-import { Geist, Geist_Mono } from 'next/font/google'
-import { Providers } from './providers'
-import './globals.css'
+import type { Metadata } from "next";
 
-const geistSans = Geist({
-  variable: '--font-geist-sans',
-  subsets: ['latin'],
-})
-
-const geistMono = Geist_Mono({
-  variable: '--font-geist-mono',
-  subsets: ['latin'],
-})
+import { Providers } from "./providers";
+import "./globals.css";
 
 export const metadata: Metadata = {
-  title: 'Yield-Pay | 以收益抵费',
-  description: '让 Gas Fee 消失在未来的收益里',
-}
+  title: "Yield Pay",
+  description: "Execution-focused DeFi routing and vault analysis interface.",
+};
 
 export default function RootLayout({
   children,
 }: Readonly<{
-  children: React.ReactNode
+  children: React.ReactNode;
 }>) {
   return (
-    <html
-      lang='zh-CN'
-      className={`${geistSans.variable} ${geistMono.variable}`}
-    >
-      <body className='min-h-screen flex flex-col antialiased'>
+    <html lang="en" className="dark h-full">
+      <body className="min-h-full bg-[var(--color-bg)] text-[var(--color-text)] antialiased">
         <Providers>{children}</Providers>
       </body>
     </html>
-  )
+  );
 }

@@ -1,35 +1,35 @@
-'use client'
+"use client";
 
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { WagmiProvider } from 'wagmi'
-import { RainbowKitProvider, darkTheme } from '@rainbow-me/rainbowkit'
-import { StrictMode, useState } from 'react'
-import { config } from './config/wagmi'
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { RainbowKitProvider, darkTheme } from "@rainbow-me/rainbowkit";
+import { StrictMode, useState } from "react";
+import { WagmiProvider } from "wagmi";
 
-import '@rainbow-me/rainbowkit/styles.css'
+import { WalletUiProvider } from "@/lib/wallet/ui-context";
+
+import { config } from "./config/wagmi";
+
+import "@rainbow-me/rainbowkit/styles.css";
 
 function makeQueryClient() {
   return new QueryClient({
     defaultOptions: {
       queries: {
-        staleTime: 1000 * 60, // 1 minute
-        gcTime: 1000 * 60 * 5, // 5 minutes
+        staleTime: 1000 * 60,
+        gcTime: 1000 * 60 * 5,
         retry: 3,
         refetchOnWindowFocus: true,
         refetchOnReconnect: true,
       },
       mutations: {
-        // Disable retry for mutations to prevent double-execution of transactions
         retry: false,
       },
     },
-  })
+  });
 }
 
 export function Providers({ children }: { children: React.ReactNode }) {
-  // Use useState to create QueryClient instance to avoid SSR hydration issues
-  // and ensure consistent instance across re-renders in StrictMode
-  const [queryClient] = useState(() => makeQueryClient())
+  const [queryClient] = useState(() => makeQueryClient());
 
   return (
     <StrictMode>
@@ -37,15 +37,15 @@ export function Providers({ children }: { children: React.ReactNode }) {
         <QueryClientProvider client={queryClient}>
           <RainbowKitProvider
             theme={darkTheme({
-              accentColor: '#6366f1',
-              accentColorForeground: 'white',
-              borderRadius: 'medium',
+              accentColor: "#00ff9d",
+              accentColorForeground: "#032616",
+              borderRadius: "small",
             })}
           >
-            {children}
+            <WalletUiProvider>{children}</WalletUiProvider>
           </RainbowKitProvider>
         </QueryClientProvider>
       </WagmiProvider>
     </StrictMode>
-  )
+  );
 }

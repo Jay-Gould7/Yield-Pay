@@ -62,10 +62,6 @@ import { coinbaseWallet, injected, walletConnect } from 'wagmi/connectors'
 
 const projectId = process.env.NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID
 
-if (!projectId) {
-  throw new Error('NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID is not set')
-}
-
 // 53 Major EVM chains supported by LI.FI - focused on mainnets for hackathon
 const supportedChains = [
   // Ethereum ecosystem core
@@ -136,7 +132,7 @@ export const config = createConfig({
   connectors: [
     injected(),
     coinbaseWallet({ appName: 'Yield-Pay' }),
-    walletConnect({ projectId }),
+    ...(projectId ? [walletConnect({ projectId })] : []),
   ],
   transports: Object.fromEntries(
     supportedChains.map((chain) => [chain.id, http()])

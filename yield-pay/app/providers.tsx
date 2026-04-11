@@ -4,6 +4,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { RainbowKitProvider, darkTheme } from "@rainbow-me/rainbowkit";
 import { StrictMode, useState } from "react";
 import { WagmiProvider } from "wagmi";
+import { base } from "wagmi/chains";
 
 import { WalletUiProvider } from "@/lib/wallet/ui-context";
 
@@ -36,6 +37,7 @@ export function Providers({ children }: { children: React.ReactNode }) {
       <WagmiProvider config={config}>
         <QueryClientProvider client={queryClient}>
           <RainbowKitProvider
+            initialChain={base}
             theme={darkTheme({
               accentColor: "#00ff9d",
               accentColorForeground: "#032616",

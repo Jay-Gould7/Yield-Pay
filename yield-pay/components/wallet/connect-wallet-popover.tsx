@@ -16,7 +16,7 @@ export function ConnectWalletPopover() {
   }
 
   return (
-    <div className="absolute bottom-16 left-0 z-10 w-72 border border-white/10 bg-[#161616] p-4 shadow-2xl">
+    <div className="absolute right-0 top-full z-10 mt-3 w-72 border border-white/10 bg-[#161616] p-4 shadow-2xl">
       <div className="flex items-start justify-between gap-3">
         <div>
           <p className="font-mono text-[10px] uppercase tracking-[0.22em] text-[var(--color-accent)]">

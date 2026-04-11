@@ -4,6 +4,7 @@ import {
   createContext,
   useContext,
   useState,
+  useSyncExternalStore,
   type PropsWithChildren,
 } from "react";
 import { useAccount, useConnect, useDisconnect } from "wagmi";
@@ -27,16 +28,29 @@ type WalletUiProviderProps = PropsWithChildren<{
   initialOpen?: boolean;
 }>;
 
+function subscribeToHydration() {
+  return () => undefined;
+}
+
+function useHasHydrated() {
+  return useSyncExternalStore(
+    subscribeToHydration,
+    () => true,
+    () => false,
+  );
+}
+
 export function WalletUiProvider({
   children,
   initialOpen = false,
 }: WalletUiProviderProps) {
   const [isOpen, setIsOpen] = useState(initialOpen);
+  const hasHydrated = useHasHydrated();
   const { address, isConnected } = useAccount();
   const { connect, connectors } = useConnect();
   const { disconnect } = useDisconnect();
 
-  const evmAddress = isConnected ? address ?? null : null;
+  const evmAddress = hasHydrated && isConnected ? address ?? null : null;
 
   const value: WalletUiContextValue = {
     isOpen,

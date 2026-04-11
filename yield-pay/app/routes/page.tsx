@@ -1,10 +1,5 @@
-import { AppShell } from "@/components/layout/app-shell";
-import { RoutesScreen } from "@/components/routes/routes-screen";
+import { redirect } from "next/navigation";
 
 export default function RoutesPage() {
-  return (
-    <AppShell>
-      <RoutesScreen />
-    </AppShell>
-  );
+  redirect("/?compare=1");
 }

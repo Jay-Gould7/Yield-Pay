@@ -1,5 +1,4 @@
-import { AppShell } from "@/components/layout/app-shell";
-import { TradeScreen } from "@/components/trade/trade-screen";
+import { redirect } from "next/navigation";
 
 type TradePageProps = {
   searchParams: Promise<{ vault?: string }>;
@@ -7,10 +6,13 @@ type TradePageProps = {
 
 export default async function TradePage({ searchParams }: TradePageProps) {
   const params = await searchParams;
+  const query = new URLSearchParams();
 
-  return (
-    <AppShell>
-      <TradeScreen vaultId={params.vault} />
-    </AppShell>
-  );
+  if (params.vault) {
+    query.set("vault", params.vault);
+  }
+
+  query.set("execute", "1");
+
+  redirect(`/?${query.toString()}`);
 }

@@ -64,12 +64,13 @@ const projectId = process.env.NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID
 
 // 53 Major EVM chains supported by LI.FI - focused on mainnets for hackathon
 const supportedChains = [
+  // Base first for faucet-first onboarding
+  base,
   // Ethereum ecosystem core
   mainnet,
   polygon,
   arbitrum,
   optimism,
-  base,
   arbitrumNova,
   // Major L2s & Alt-L1s
   avalanche,

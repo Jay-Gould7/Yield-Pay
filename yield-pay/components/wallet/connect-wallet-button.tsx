@@ -8,12 +8,19 @@ import { useWalletUi } from "@/lib/wallet/ui-context";
 
 import { ConnectWalletPopover } from "./connect-wallet-popover";
 
-export function ConnectWalletButton() {
+type ConnectWalletButtonProps = {
+  className?: string;
+};
+
+export function ConnectWalletButton({
+  className = "",
+}: ConnectWalletButtonProps) {
   const { toggle, evmAddress } = useWalletUi();
+  const buttonClassName = className ? `gap-2 ${className}` : "w-full gap-2";
 
   return (
     <div className="relative">
-      <TerminalButton className="w-full gap-2" onClick={toggle}>
+      <TerminalButton className={buttonClassName} onClick={toggle}>
         <Wallet className="size-4" />
         {formatWalletSummary({ evmAddress })}
       </TerminalButton>

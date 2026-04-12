@@ -7,7 +7,8 @@ export function ConnectWalletPopover() {
     isOpen,
     close,
     evmLabel,
-    connectEvm,
+    evmConnectorName,
+    connectInjectedWallet,
     disconnectEvm,
   } = useWalletUi();
 
@@ -23,7 +24,7 @@ export function ConnectWalletPopover() {
             Wallet access
           </p>
           <p className="mt-2 text-sm text-zinc-400">
-            Connect an EVM wallet without leaving the shell.
+            Connect an external wallet to get the live Base quote and execute the route.
           </p>
         </div>
         <button
@@ -37,21 +38,44 @@ export function ConnectWalletPopover() {
       </div>
       <div className="mt-4 grid gap-3">
         {evmLabel ? (
-          <button
-            type="button"
-            onClick={disconnectEvm}
-            className="border border-white/10 px-3 py-3 text-left font-mono text-[11px] uppercase tracking-[0.18em] text-[var(--color-accent)]"
-          >
-            EVM {evmLabel}
-          </button>
+          <>
+            <div className="border border-white/10 bg-white/5 px-3 py-3 text-left">
+              <p className="font-mono text-[10px] uppercase tracking-[0.18em] text-[var(--color-accent)]">
+                Wallet Active
+              </p>
+              <p className="mt-2 font-mono text-[11px] uppercase tracking-[0.18em] text-[var(--color-text)]">
+                {evmLabel}
+              </p>
+              <p className="mt-2 text-xs text-zinc-500">
+                {evmConnectorName ?? "Wallet connected"}
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={disconnectEvm}
+              className="border border-white/10 px-3 py-3 text-left font-mono text-[11px] uppercase tracking-[0.18em] text-[var(--color-accent)]"
+            >
+              Disconnect wallet
+            </button>
+          </>
         ) : (
-          <button
-            type="button"
-            onClick={connectEvm}
-            className="border border-white/10 px-3 py-3 text-left font-mono text-[11px] uppercase tracking-[0.18em] text-[var(--color-text)]"
-          >
-            Connect EVM
-          </button>
+          <>
+            <button
+              type="button"
+              onClick={connectInjectedWallet}
+              className="border border-[var(--color-accent)]/30 bg-[var(--color-accent)]/8 px-3 py-3 text-left"
+            >
+              <p className="font-mono text-[10px] uppercase tracking-[0.18em] text-[var(--color-accent)]">
+                Connect
+              </p>
+              <p className="mt-2 font-mono text-[11px] uppercase tracking-[0.18em] text-[var(--color-text)]">
+                Connect Wallet
+              </p>
+              <p className="mt-2 text-xs text-zinc-500">
+                Uses MetaMask, Rabby, Coinbase Wallet, or another injected / WalletConnect flow.
+              </p>
+            </button>
+          </>
         )}
         <div className="border border-dashed border-white/10 px-3 py-3 text-left font-mono text-[11px] uppercase tracking-[0.18em] text-zinc-500">
           Solana coming later

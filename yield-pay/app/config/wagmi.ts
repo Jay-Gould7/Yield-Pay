@@ -58,7 +58,7 @@ import {
   worldchain,
   xLayer,
 } from 'wagmi/chains'
-import { coinbaseWallet, injected, walletConnect } from 'wagmi/connectors'
+import { injected, walletConnect } from 'wagmi/connectors'
 
 const projectId = process.env.NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID
 
@@ -132,7 +132,6 @@ export const config = createConfig({
   chains: supportedChains,
   connectors: [
     injected(),
-    coinbaseWallet({ appName: 'Yield-Pay' }),
     ...(projectId ? [walletConnect({ projectId })] : []),
   ],
   transports: Object.fromEntries(

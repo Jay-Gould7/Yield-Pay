@@ -1,5 +1,6 @@
 "use client";
 
+import { ParallaxPxlKitIcon } from "@pxlkit/core";
 import {
   useEffect,
   useEffectEvent,
@@ -10,10 +11,6 @@ import {
 import { erc20Abi, type Address, type Hash } from "viem";
 import {
   ArrowRight,
-  Check,
-  ChevronRight,
-  CircleDashed,
-  ShieldCheck,
   Sparkles,
 } from "lucide-react";
 import {
@@ -26,12 +23,13 @@ import {
 import { base } from "wagmi/chains";
 
 import { useYieldPay } from "@/hooks/useYieldPay";
+import { RetroTV } from "@/components/icons/retro-tv";
+import Shuffle from "@/components/rb/Shuffle";
 import { TerminalButton } from "@/components/shared/terminal-button";
+import { ConnectWalletButton } from "@/components/wallet/connect-wallet-button";
 import {
   calculateBreakEvenEstimate,
   formatBreakEvenWindow,
-  formatCompactUsd,
-  formatHoursUntilProfit,
   formatUsd,
 } from "@/lib/calculations";
 import { CHAINS } from "@/lib/constants";
@@ -70,7 +68,7 @@ export function HomeScreen({
   initialExecutionOpen = false,
   initialVaultId,
 }: HomeScreenProps) {
-  const { evmAddress, connectEvm, open } = useWalletUi();
+  const { evmAddress, connectEvm } = useWalletUi();
   const { address: accountAddress, chainId } = useAccount();
   const basePublicClient = usePublicClient({ chainId: base.id });
   const { refresh, reset, data: liveQuote, error: liveError, isLoading: isQuoteLoading } =
@@ -88,7 +86,6 @@ export function HomeScreen({
   const [selectedVaultAddress, setSelectedVaultAddress] = useState<Address | null>(
     null,
   );
-  const [isCompareOpen, setIsCompareOpen] = useState(initialCompareOpen);
   const [executionStep, setExecutionStep] = useState<number | null>(
     initialExecutionOpen ? 0 : null,
   );
@@ -196,9 +193,6 @@ export function HomeScreen({
       : selectedFallbackOutcome?.estimate.dailyYieldUsd ?? 0;
   const activePrincipalUsd =
     liveQuote?.principalUsd ?? amountValue;
-  const activeReason = liveQuote
-    ? `${liveQuote.selectedVault.protocol.name} was selected from the live Base vault surface and matched with a current LI.FI route quote.`
-    : selectedFallbackOutcome?.vault.reason ?? "";
   const recoveryProgress24h =
     activeCostUsd > 0 ? Math.min(100, (activeDailyYieldUsd / activeCostUsd) * 100) : 0;
   const hasExecutableQuote = Boolean(liveQuote?.transactionRequest);
@@ -233,6 +227,16 @@ export function HomeScreen({
             : executionError
               ? "Retry Route"
               : "Start Earning";
+  const routeStateLabel = isExecutionComplete
+    ? "Confirmed"
+    : isExecutionRunning
+      ? "Broadcasting"
+      : hasExecutableQuote
+        ? "Ready"
+        : isQuoteLoading
+          ? "Building"
+          : "Pending";
+  const isVaultMatrixHighlighted = initialCompareOpen || Boolean(selectedVaultAddress);
 
   const resetExecutionState = () => {
     setApprovalHash(null);
@@ -248,6 +252,19 @@ export function HomeScreen({
       ...current,
       [phaseId]: detail,
     }));
+  };
+
+  const readRouteAllowance = async (owner: Address, spender: Address, tokenAddress: Address) => {
+    if (!basePublicClient) {
+      throw new Error("Base public client is unavailable.");
+    }
+
+    return basePublicClient.readContract({
+      abi: erc20Abi,
+      address: tokenAddress,
+      args: [owner, spender],
+      functionName: "allowance",
+    });
   };
 
   const requestLiveQuote = useEffectEvent(async () => {
@@ -346,13 +363,11 @@ export function HomeScreen({
     resetExecutionState();
     setSelectedProtocol(item.protocol);
     setSelectedVaultAddress(item.vaultAddress ?? null);
-    setIsCompareOpen(false);
   };
 
   const handlePrimaryAction = async () => {
     if (!walletAddress) {
       connectEvm();
-      open();
       return;
     }
 
@@ -397,6 +412,10 @@ export function HomeScreen({
     try {
       const executionChainId =
         executableQuote.transactionRequest.chainId ?? executableQuote.fromChainId;
+      const requiredAmount = BigInt(executableQuote.amountAtomic);
+      const approvalRequiredByRoute =
+        !executableQuote.fromToken.isNative && Boolean(executableQuote.approvalAddress);
+      let allowanceSatisfied = executableQuote.fromToken.isNative || !executableQuote.approvalAddress;
 
       if (chainId !== executionChainId) {
         await switchChainAsync({ chainId: executionChainId });
@@ -421,6 +440,21 @@ export function HomeScreen({
 
       setExecutionStep(2);
 
+      if (approvalRequiredByRoute && executableQuote.approvalAddress) {
+        setExecutionNote(
+          "approval",
+          `Checking ${executableQuote.fromToken.symbol} allowance on Base before execution.`,
+        );
+
+        const allowance = await readRouteAllowance(
+          walletAddress,
+          executableQuote.approvalAddress,
+          executableQuote.fromToken.address,
+        );
+
+        allowanceSatisfied = allowance >= requiredAmount;
+      }
+
       if (executableQuote.fromToken.isNative || !executableQuote.approvalAddress) {
         setExecutionNote(
           "approval",
@@ -428,61 +462,46 @@ export function HomeScreen({
             ? "Native ETH route detected. No ERC-20 approval is required."
             : "The route can spend this token without a separate approval transaction.",
         );
-      } else {
+      } else if (!allowanceSatisfied) {
+        setExecutionNote(
+          "approval",
+          `Approval required. Confirm ${executableQuote.fromToken.symbol} spending in your wallet.`,
+        );
+
+        const nextApprovalHash = await writeContractAsync({
+          abi: erc20Abi,
+          account: walletAddress,
+          address: executableQuote.fromToken.address,
+          args: [executableQuote.approvalAddress, requiredAmount],
+          chainId: executableQuote.fromChainId,
+          functionName: "approve",
+        });
+
+        setApprovalHash(nextApprovalHash);
+        setExecutionNote(
+          "approval",
+          `Approval submitted: ${formatHashLabel(
+            nextApprovalHash,
+          )}. Waiting for Base confirmation.`,
+        );
+
         if (!basePublicClient) {
           throw new Error("Base public client is unavailable.");
         }
 
-        const requiredAmount = BigInt(executableQuote.amountAtomic);
-        setExecutionNote(
-          "approval",
-          `Checking ${executableQuote.fromToken.symbol} allowance on Base before execution.`,
-        );
-
-        const allowance = await basePublicClient.readContract({
-          abi: erc20Abi,
-          address: executableQuote.fromToken.address,
-          args: [walletAddress, executableQuote.approvalAddress],
-          functionName: "allowance",
+        await basePublicClient.waitForTransactionReceipt({
+          hash: nextApprovalHash,
         });
 
-        if (allowance < requiredAmount) {
-          setExecutionNote(
-            "approval",
-            `Approval required. Confirm ${executableQuote.fromToken.symbol} spending in your wallet.`,
-          );
-
-          const nextApprovalHash = await writeContractAsync({
-            abi: erc20Abi,
-            account: walletAddress,
-            address: executableQuote.fromToken.address,
-            args: [executableQuote.approvalAddress, requiredAmount],
-            chainId: executableQuote.fromChainId,
-            functionName: "approve",
-          });
-
-          setApprovalHash(nextApprovalHash);
-          setExecutionNote(
-            "approval",
-            `Approval submitted: ${formatHashLabel(
-              nextApprovalHash,
-            )}. Waiting for Base confirmation.`,
-          );
-
-          await basePublicClient.waitForTransactionReceipt({
-            hash: nextApprovalHash,
-          });
-
-          setExecutionNote(
-            "approval",
-            `Approval confirmed on Base. ${executableQuote.fromToken.symbol} is now spendable for this route.`,
-          );
-        } else {
-          setExecutionNote(
-            "approval",
-            `Existing ${executableQuote.fromToken.symbol} allowance already covers this amount.`,
-          );
-        }
+        setExecutionNote(
+          "approval",
+          `Approval confirmed on Base. ${executableQuote.fromToken.symbol} is now spendable for this route.`,
+        );
+      } else {
+        setExecutionNote(
+          "approval",
+          `Existing ${executableQuote.fromToken.symbol} allowance already covers this amount.`,
+        );
       }
 
       setExecutionStep(3);
@@ -528,113 +547,84 @@ export function HomeScreen({
   };
 
   return (
-    <div className="px-4 py-6 lg:px-8 lg:py-10">
-      <div className="mx-auto max-w-[1400px] space-y-8">
-        <section className="panel-frame overflow-hidden bg-[var(--color-panel)]">
-          <div className="grid gap-0 xl:grid-cols-[1.25fr_0.75fr]">
-            <div className="relative overflow-hidden p-6 md:p-8 xl:p-10">
-              <div className="absolute right-0 top-0 h-56 w-56 rounded-full bg-[var(--color-accent)]/10 blur-3xl" />
-              <div className="relative">
-                <p className="font-mono text-[10px] uppercase tracking-[0.32em] text-[var(--color-accent)]">
-                  Base_Faucet_Flow
-                </p>
-                <h1 className="mt-4 max-w-4xl font-[family-name:var(--font-display)] text-4xl font-bold tracking-[-0.08em] text-white sm:text-5xl xl:text-6xl">
-                  This move pays for itself in{" "}
-                  <span className="text-[var(--color-accent)]">
-                    {formatBreakEvenWindow(activeBreakEvenDays)}
-                  </span>
-                </h1>
-                <p className="mt-5 max-w-3xl text-base leading-8 text-zinc-400">
-                  Live quote mode is now active on Base: we fetch depositable vaults
-                  from LI.FI Earn, lock a route quote, then estimate exactly how long
-                  vault yield should take to cover today&apos;s cost.
-                </p>
-
-                <div className="mt-8 grid gap-4 md:grid-cols-3">
-                  <HeroStat label="Projected Cost" value={formatUsd(activeCostUsd)} />
-                  <HeroStat
-                    label="Daily Yield"
-                    value={`${formatUsd(activeDailyYieldUsd)}/day`}
-                  />
-                  <HeroStat
-                    label="Net-Positive"
-                    value={formatHoursUntilProfit(activeBreakEvenDays)}
-                  />
-                </div>
-              </div>
-            </div>
-
-            <div className="border-t border-white/8 bg-[var(--color-bg-elevated)] p-6 md:p-8 xl:border-l xl:border-t-0">
-              <p className="font-mono text-[10px] uppercase tracking-[0.24em] text-zinc-500">
-                Live Recommendation
-              </p>
-              <div className="mt-5 space-y-5">
-                <div className="flex items-start justify-between gap-4">
-                  <div>
-                    <p className="font-[family-name:var(--font-display)] text-3xl font-semibold tracking-[-0.05em] text-white">
-                      {activeVaultName}
-                    </p>
-                    <p className="mt-2 font-mono text-[10px] uppercase tracking-[0.2em] text-zinc-500">
-                      {activeProtocolName} / {activeNetwork}
-                    </p>
-                  </div>
-                  <span className="border border-white/10 bg-white/5 px-3 py-2 font-mono text-[10px] uppercase tracking-[0.18em] text-[var(--color-accent)]">
-                    {liveQuote ? "Live quote" : "Fallback model"}
-                  </span>
-                </div>
-
-                <div className="grid gap-3">
-                  <InfoCard
-                    title="APY"
-                    value={`${activeApyPercent.toFixed(2)}%`}
-                    note={
-                      liveQuote
-                        ? `Quote ${liveQuote.quoteId ?? "pending"} / approval ${
-                            liveQuote.approvalAddress ? "may be required" : "not required"
-                          }`
-                        : "Static preview until a wallet is connected"
-                    }
-                  />
-                  <InfoCard
-                    title="Why this wins"
-                    value={activeReason}
-                    note={
-                      liveQuote
-                        ? "Live Earn vault selected from Base and matched to the current quote."
-                        : chain.routeNote
-                    }
-                  />
-                </div>
-
-                <TerminalButton
-                  className="w-full justify-between py-4"
-                  variant="secondary"
-                  onClick={() => setIsCompareOpen(true)}
-                >
-                  Compare vaults
-                  <ChevronRight className="size-4" />
-                </TerminalButton>
-              </div>
+    <div className="px-4 py-5 lg:px-8 lg:py-7">
+        <div className="mx-auto max-w-[1400px] space-y-4">
+        <section className="relative overflow-hidden py-0">
+          <div className="absolute right-0 top-0 h-56 w-56 rounded-full bg-[var(--color-accent)]/10 blur-3xl" />
+          <div className="relative flex flex-col gap-5 md:flex-row md:items-end md:justify-between">
+            <h1 className="pixel-hero-heading max-w-5xl">
+              <span className="pixel-hero-copy">
+                <span className="pixel-hero-line">This move pays</span>
+                <span className="pixel-hero-line">for itself in</span>
+              </span>
+              <Shuffle
+                text={formatBreakEvenWindow(activeBreakEvenDays)}
+                tag="span"
+                className="pixel-hero-shuffle"
+                shuffleDirection="up"
+                duration={0.35}
+                animationMode="evenodd"
+                shuffleTimes={1}
+                ease="power3.out"
+                stagger={0.03}
+                threshold={0.1}
+                triggerOnce={true}
+                triggerOnHover={true}
+                respectReducedMotion={true}
+                loop={false}
+                loopDelay={0}
+                textAlign="left"
+              />
+            </h1>
+            <div className="flex w-full items-end justify-end gap-2 md:w-auto md:self-end">
+              <span
+                aria-hidden="true"
+                className="pointer-events-none flex shrink-0 items-center justify-center"
+              >
+                <ParallaxPxlKitIcon
+                  icon={RetroTV}
+                  size={45}
+                  colorful
+                  interactive={false}
+                  shadow={false}
+                />
+              </span>
+              <ConnectWalletButton className="pixel-chip w-full justify-between px-2 py-1.5 text-[6px] tracking-[0.1em] shadow-[var(--shadow-accent)] md:w-auto md:min-w-[9.9rem]" />
             </div>
           </div>
         </section>
 
-        <section className="grid gap-8 xl:grid-cols-[0.92fr_1.08fr]">
-          <div className="space-y-8">
-            <section className="panel-frame bg-[var(--color-bg-elevated)] p-6 md:p-8">
-              <div className="flex items-center gap-3">
-                <Sparkles className="size-4 text-[var(--color-accent)]" />
-                <p className="font-mono text-[10px] uppercase tracking-[0.24em] text-[var(--color-accent)]">
-                  One Input Pass
+        <section className="grid gap-5 md:grid-cols-[4fr_6fr]">
+          <section className="panel-frame bg-[var(--color-bg-elevated)] p-6 md:p-8">
+            <div className="flex items-center gap-3">
+              <Sparkles className="size-4 text-[var(--color-accent)]" />
+              <p className="font-mono text-[10px] uppercase tracking-[0.24em] text-[var(--color-accent)]">
+                Single-Screen Command
+              </p>
+            </div>
+
+            <div className="mt-5 flex flex-wrap items-start justify-between gap-4">
+              <div>
+                <p className=" font-[family-name:var(--font-display)] text-2xl font-semibold tracking-[-0.05em] text-white">
+                  USDC into USDC
+                </p>
+                <p className="mt-2 text-sm leading-7 text-zinc-400">
+                  {activeVaultName ?? "Awaiting vault"} on {activeProtocolName} /{" "}
+                  {activeNetwork}
                 </p>
               </div>
+              <span className="pixel-chip bg-white/5 px-3 py-2 font-mono text-[10px] uppercase tracking-[0.18em] text-[var(--color-accent)]">
+                {routeStateLabel}
+              </span>
+            </div>
 
-              <div className="mt-6 grid gap-4 md:grid-cols-3">
+            <div className="mt-6 grid gap-4 lg:grid-cols-[1.05fr_0.95fr]">
+              <div className="space-y-4">
                 <InputBlock label="From Chain">
                   <select
                     value={chain.id}
                     disabled
-                    className="w-full border border-white/10 bg-white/5 px-4 py-4 text-sm text-white outline-none"
+                    className="pixel-box w-full bg-white/5 px-4 py-4 text-sm text-white outline-none"
                   >
                     <option value={chain.id} className="bg-[#111111]">
                       {chain.label}
@@ -646,7 +636,7 @@ export function HomeScreen({
                   <select
                     value={tokenId}
                     onChange={(event) => handleTokenChange(event.target.value)}
-                    className="w-full border border-white/10 bg-white/5 px-4 py-4 text-sm text-white outline-none transition focus:border-[var(--color-accent)]"
+                    className="pixel-box w-full bg-white/5 px-4 py-4 text-sm text-white outline-none transition focus:border-[var(--color-accent)]"
                   >
                     {sourceTokens.map((option) => (
                       <option key={option.id} value={option.id} className="bg-[#111111]">
@@ -662,316 +652,150 @@ export function HomeScreen({
                     value={amountInput}
                     onChange={(event) => handleAmountChange(event.target.value)}
                     placeholder="0.02"
-                    className="w-full border border-white/10 bg-white/5 px-4 py-4 text-sm text-white outline-none transition placeholder:text-zinc-600 focus:border-[var(--color-accent)]"
+                    className="pixel-box w-full bg-white/5 px-4 py-4 text-sm text-white outline-none transition placeholder:text-zinc-600 focus:border-[var(--color-accent)]"
                   />
                 </InputBlock>
               </div>
 
-              <div className="mt-5 text-sm leading-7 text-zinc-500">
-                Base faucet mode is enabled here, so source token addresses and the
-                default quote flow both stay on Base mainnet.
-              </div>
-            </section>
-
-            <section className="panel-frame bg-[var(--color-panel)] p-6 md:p-8">
-              <div className="flex items-center gap-3">
-                <ShieldCheck className="size-4 text-[var(--color-accent)]" />
-                <p className="font-mono text-[10px] uppercase tracking-[0.24em] text-[var(--color-accent)]">
-                  Cost Recovery Preview
-                </p>
-              </div>
-
-              <div className="mt-6 space-y-5">
-                <MetricRow label="Estimated route cost" value={formatUsd(activeCostUsd)} />
-                <MetricRow
-                  label="Projected yearly yield"
-                  value={formatCompactUsd(activePrincipalUsd * (activeApyPercent / 100))}
-                />
-                <MetricRow
-                  label="Break-even window"
-                  value={formatBreakEvenWindow(activeBreakEvenDays)}
-                />
-              </div>
-
-              <div className="mt-8">
-                <div className="mb-3 flex items-center justify-between font-mono text-[10px] uppercase tracking-[0.18em] text-zinc-500">
-                  <span>First-day cost recovery</span>
-                  <span className="text-[var(--color-accent)]">
-                    {Math.round(recoveryProgress24h)}%
-                  </span>
-                </div>
-                <div className="h-2 bg-white/8">
-                  <div
-                    className="h-full bg-[var(--color-accent)] shadow-[var(--shadow-accent)]"
-                    style={{ width: `${recoveryProgress24h}%` }}
-                  />
-                </div>
-                <p className="mt-4 text-sm leading-7 text-zinc-400">
-                  {liveQuote
-                    ? "The live quote is now anchored to the selected Base vault and current wallet address."
-                    : selectedFallbackOutcome?.vault.routePlan}
-                </p>
-                {liveError ? (
-                  <p className="mt-4 border border-[var(--color-danger)]/30 bg-[var(--color-danger)]/8 px-4 py-3 text-sm text-[var(--color-danger)]">
-                    {liveError}
-                  </p>
-                ) : null}
-              </div>
-            </section>
-          </div>
-
-          <div className="space-y-8">
-            <section className="panel-frame bg-[var(--color-panel)] p-6 md:p-8">
-              <div className="flex flex-wrap items-start justify-between gap-4">
-                <div>
-                  <p className="font-mono text-[10px] uppercase tracking-[0.24em] text-zinc-500">
-                    Recommended move
-                  </p>
-                  <h2 className="mt-3 font-[family-name:var(--font-display)] text-3xl font-semibold tracking-[-0.05em] text-white">
-                    {token.label} on Base into {activeVaultName}
-                  </h2>
-                  <p className="mt-4 max-w-2xl text-sm leading-7 text-zinc-400">
-                    {liveQuote
-                      ? "Live APY and route fees are now coming from LI.FI instead of the local mock model."
-                      : "Connect your wallet to replace the fallback model with a live Base quote and live Earn vault selection."}
-                  </p>
-                </div>
-                <div className="border border-white/10 bg-white/5 px-4 py-3 font-mono text-[10px] uppercase tracking-[0.18em] text-zinc-500">
-                  {liveQuote ? "Live Base route" : "Preview mode"}
-                </div>
-              </div>
-
-              <div className="mt-8 grid gap-4 md:grid-cols-3">
-                <SummaryPanel
+              <div className="space-y-4">
+                <CommandMetric
                   label="Principal"
                   value={formatUsd(activePrincipalUsd)}
-                  note="USD notional used for break-even math"
                 />
-                <SummaryPanel
-                  label="APY"
+                <CommandMetric
+                  label="Break-even"
+                  value={formatBreakEvenWindow(activeBreakEvenDays)}
+                />
+                <CommandMetric
+                  label="Live APY"
                   value={`${activeApyPercent.toFixed(2)}%`}
-                  note={`${activeProtocolName} / Base yield source`}
                 />
-                <SummaryPanel
-                  label="Transaction"
-                  value={
-                    isExecutionComplete
-                      ? "Confirmed"
-                      : isExecutionRunning
-                        ? "Broadcasting"
-                        : hasExecutableQuote
-                          ? "Ready"
-                          : "Pending"
-                  }
-                  note={
-                    routeHash
-                      ? `Hash ${formatHashLabel(routeHash)}`
-                      : liveQuote?.transactionRequest
-                        ? `To ${liveQuote.transactionRequest.to.slice(0, 8)}...`
-                        : "Awaiting live route assembly"
-                  }
-                />
-              </div>
-
-              <div className="mt-8 flex flex-col gap-3">
-                <TerminalButton
-                  className="w-full justify-center gap-3 py-4 text-[12px]"
-                  disabled={
-                    amountValue <= 0 ||
-                    isExecutionRunning ||
-                    (Boolean(evmAddress) && !hasExecutableQuote && isQuoteLoading)
-                  }
-                  onClick={() => void handlePrimaryAction()}
-                >
-                  {ctaLabel}
-                  {!isExecutionRunning && !isExecutionComplete ? (
-                    <ArrowRight className="size-4" />
-                  ) : null}
-                </TerminalButton>
-                <p className="text-center text-sm text-zinc-500">
-                  {evmAddress
-                    ? hasExecutableQuote
-                      ? "Live quote locked. One action, one route, one recovery window."
-                      : "Connected. Waiting for the live Base quote to finish."
-                    : "Wallet connection is the only step before live quote generation."}
-                </p>
-              </div>
-            </section>
-
-            {(executionStep !== null || initialExecutionOpen) && (
-              <section className="panel-frame bg-[var(--color-bg-elevated)] p-6 md:p-8">
-                <p className="font-mono text-[10px] uppercase tracking-[0.24em] text-[var(--color-accent)]">
-                  Execution Status
-                </p>
-                <div className="mt-6 space-y-4">
-                  {executionPhasesWithNotes.map((phase, index) => {
-                    const isDone = executionStep !== null && index < executionStep;
-                    const isActive = executionStep === index;
-
-                    return (
-                      <div
-                        key={phase.id}
-                        className={`flex items-start gap-4 border border-white/8 px-4 py-4 transition ${
-                          isActive ? "bg-white/5" : "bg-transparent"
-                        }`}
-                      >
-                        <div className="mt-0.5">
-                          {isDone ? (
-                            <Check className="size-4 text-[var(--color-accent)]" />
-                          ) : isActive ? (
-                            <CircleDashed className="size-4 animate-spin text-[var(--color-accent)]" />
-                          ) : (
-                            <div className="size-4 rounded-full border border-white/10" />
-                          )}
-                        </div>
-
-                        <div>
-                          <p className="font-mono text-[11px] uppercase tracking-[0.18em] text-white">
-                            {phase.title}
-                          </p>
-                          <p className="mt-2 text-sm leading-7 text-zinc-400">
-                            {phase.detail}
-                          </p>
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-
-                {isExecutionComplete ? (
-                  <div className="mt-6 border border-[var(--color-accent)]/30 bg-[var(--color-accent)]/8 px-4 py-4 text-sm text-[var(--color-text)]">
-                    Route complete. The position is now active, and projected vault
-                    yield is working toward full cost recovery.
-                  </div>
-                ) : null}
-
-                {executionError ? (
-                  <div className="mt-6 border border-[var(--color-danger)]/30 bg-[var(--color-danger)]/8 px-4 py-4 text-sm text-[var(--color-danger)]">
-                    {executionError}
-                  </div>
-                ) : null}
-
-                {approvalHash || routeHash ? (
-                  <div className="mt-6 grid gap-3 md:grid-cols-2">
-                    {approvalHash ? (
-                      <TxCard
-                        href={buildExplorerUrl(approvalHash)}
-                        label="Approval Tx"
-                        value={formatHashLabel(approvalHash)}
-                      />
-                    ) : null}
-                    {routeHash ? (
-                      <TxCard
-                        href={buildExplorerUrl(routeHash)}
-                        label="Route Tx"
-                        value={formatHashLabel(routeHash)}
-                      />
-                    ) : null}
-                  </div>
-                ) : null}
-              </section>
-            )}
-          </div>
-        </section>
-      </div>
-
-      {isCompareOpen ? (
-        <div
-          className="fixed inset-0 z-[70] bg-black/70 backdrop-blur-sm"
-          onClick={() => setIsCompareOpen(false)}
-        >
-          <div className="mx-auto flex min-h-screen max-w-[1400px] items-center px-4 py-8 lg:px-8">
-            <div
-              className="panel-frame ml-auto w-full max-w-[640px] bg-[#151515] p-6 md:p-8"
-              onClick={(event) => event.stopPropagation()}
-            >
-              <div className="flex items-start justify-between gap-4">
-                <div>
-                  <p className="font-mono text-[10px] uppercase tracking-[0.24em] text-[var(--color-accent)]">
-                    Compare Vaults
-                  </p>
-                  <h2 className="mt-3 font-[family-name:var(--font-display)] text-3xl font-semibold tracking-[-0.05em] text-white">
-                    Pick the recovery window you want
-                  </h2>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => setIsCompareOpen(false)}
-                  className="border border-white/10 px-3 py-2 font-mono text-[10px] uppercase tracking-[0.18em] text-zinc-500 transition hover:text-white"
-                >
-                  Close
-                </button>
-              </div>
-
-              <div className="mt-8 space-y-3">
-                {compareItems.map((item) => {
-                  const isSelected = item.vaultAddress
-                    ? selectedVaultAddress === item.vaultAddress ||
-                      liveQuote?.selectedVault.address === item.vaultAddress
-                    : selectedProtocol === item.protocol;
-
-                  return (
-                    <button
-                      key={item.id}
-                      type="button"
-                      onClick={() => handleCompareSelection(item)}
-                      className={`w-full border p-5 text-left transition ${
-                        isSelected
-                          ? "border-[var(--color-accent)] bg-[var(--color-accent)]/6"
-                          : "border-white/10 bg-white/0 hover:bg-white/5"
-                      }`}
-                    >
-                      <div className="flex flex-wrap items-start justify-between gap-4">
-                        <div>
-                          <p className="font-[family-name:var(--font-display)] text-2xl font-semibold tracking-[-0.05em] text-white">
-                            {item.label}
-                          </p>
-                          <p className="mt-2 font-mono text-[10px] uppercase tracking-[0.18em] text-zinc-500">
-                            {item.protocol} / Base
-                          </p>
-                        </div>
-                        <span className="font-mono text-[10px] uppercase tracking-[0.18em] text-[var(--color-accent)]">
-                          {item.value}
-                        </span>
-                      </div>
-
-                      <div className="mt-5 grid gap-4 md:grid-cols-3">
-                        <CompareMetric label="Cost" value={formatUsd(item.estimatedCostUsd)} />
-                        <CompareMetric
-                          label="Daily Yield"
-                          value={`${formatUsd(item.dailyYieldUsd)}/day`}
-                        />
-                        <CompareMetric
-                          label="Source"
-                          value={item.isLive ? "Live" : "Model"}
-                        />
-                      </div>
-
-                      <p className="mt-5 text-sm leading-7 text-zinc-400">{item.note}</p>
-                    </button>
-                  );
-                })}
               </div>
             </div>
-          </div>
-        </div>
-      ) : null}
-    </div>
-  );
-}
 
-function HeroStat({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="border border-white/8 bg-white/3 p-4">
-      <p className="font-mono text-[10px] uppercase tracking-[0.18em] text-zinc-500">
-        {label}
-      </p>
-      <p className="mt-2 font-mono text-2xl tracking-[-0.05em] text-white">
-        {value}
-      </p>
+            <div className="mt-6 flex flex-col gap-3">
+              <TerminalButton
+                className="w-full justify-center gap-3 py-4 text-[12px]"
+                disabled={
+                  amountValue <= 0 ||
+                  isExecutionRunning ||
+                  (Boolean(evmAddress) && !hasExecutableQuote && isQuoteLoading)
+                }
+                onClick={() => void handlePrimaryAction()}
+              >
+                {ctaLabel}
+                {!isExecutionRunning && !isExecutionComplete ? (
+                  <ArrowRight className="size-4" />
+                ) : null}
+              </TerminalButton>
+              <p className="text-center text-sm text-zinc-500">
+                {evmAddress
+                  ? hasExecutableQuote
+                    ? "All critical numbers are already on screen. The next click only drives wallet confirmations."
+                    : "Connected. Waiting for the live Base quote to finish."
+                  : "Wallet connection is the only step before live quote generation."}
+              </p>
+            </div>
+          </section>
+
+          <section
+            className={`panel-frame bg-[var(--color-panel)] p-6 md:p-8 ${
+              isVaultMatrixHighlighted ? "shadow-[var(--shadow-accent)]" : ""
+            }`}
+          >
+            <div className="flex flex-wrap items-start justify-between gap-4">
+              <div>
+                <p className="font-mono text-[10px] uppercase tracking-[0.24em] text-[var(--color-accent)]">
+                  Vault Matrix
+                </p>
+                <h2 className="mt-3 font-[family-name:var(--font-display)] text-2xl font-semibold tracking-[-0.05em] text-white">
+                  Compare every recovery window on the page
+                </h2>
+              </div>
+            </div>
+
+            <div className="pixel-box mt-6 overflow-hidden bg-white/[0.02]">
+              <div className="hidden grid-cols-[1.7fr_0.95fr_1fr_0.8fr] gap-4 border-b border-white/8 bg-white/4 px-5 py-3 md:grid">
+                <p className="font-mono text-[10px] uppercase tracking-[0.18em] text-zinc-500">
+                  Name
+                </p>
+                <p className="font-mono text-[10px] uppercase tracking-[0.18em] text-zinc-500">
+                  Break-even
+                </p>
+                <p className="font-mono text-[10px] uppercase tracking-[0.18em] text-zinc-500">
+                  Daily Yield
+                </p>
+                <p className="font-mono text-[10px] uppercase tracking-[0.18em] text-zinc-500">
+                  Source
+                </p>
+              </div>
+
+              {compareItems.map((item) => {
+                const isSelected = item.vaultAddress
+                  ? selectedVaultAddress === item.vaultAddress ||
+                    liveQuote?.selectedVault.address === item.vaultAddress
+                  : selectedProtocol === item.protocol;
+
+                return (
+                  <button
+                    key={item.id}
+                    type="button"
+                    onClick={() => handleCompareSelection(item)}
+                    className={`w-full border-b border-white/8 px-5 py-4 text-left transition last:border-b-0 ${
+                      isSelected
+                        ? "bg-[var(--color-accent)]/6"
+                        : "border-white/10 bg-white/0 hover:bg-white/5"
+                    }`}
+                  >
+                    <div className="grid gap-3 md:grid-cols-[1.7fr_0.95fr_1fr_0.8fr] md:items-center">
+                      <CompareRowItem
+                        label="Name"
+                        value={item.label}
+                        className="font-[family-name:var(--font-display)] text-xl font-semibold tracking-[-0.04em] text-white"
+                      />
+                      <CompareRowItem
+                        label="Break-even"
+                        value={item.value}
+                      />
+                      <CompareRowItem
+                        label="Daily Yield"
+                        value={`${formatUsd(item.dailyYieldUsd)}/day`}
+                      />
+                      <CompareRowItem
+                        label="Source"
+                        value={item.isLive ? "LIVE" : "MODEL"}
+                        className="font-mono text-[11px] uppercase tracking-[0.18em] text-[var(--color-accent)]"
+                      />
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+            <div className="mt-6">
+              <div className="mb-3 flex items-center justify-between font-mono text-[10px] uppercase tracking-[0.18em] text-zinc-500">
+                <span>First-day cost recovery</span>
+                <span className="text-[var(--color-accent)]">
+                  {Math.round(recoveryProgress24h)}%
+                </span>
+              </div>
+              <div className="pixel-box h-4 overflow-hidden bg-white/8 p-0">
+                <div
+                  className="h-full bg-[var(--color-accent)] shadow-[var(--shadow-accent)]"
+                  style={{ width: `${recoveryProgress24h}%` }}
+                />
+              </div>
+              {liveError ? (
+                <p className="mt-4 border border-[var(--color-danger)]/30 bg-[var(--color-danger)]/8 px-4 py-3 text-sm text-[var(--color-danger)]">
+                  {liveError}
+                </p>
+              ) : null}
+            </div>
+            </section>
+          </section>
+        </div>
     </div>
-  );
-}
+    );
+  }
 
 function InputBlock({ label, children }: { label: string; children: ReactNode }) {
   return (
@@ -984,66 +808,36 @@ function InputBlock({ label, children }: { label: string; children: ReactNode })
   );
 }
 
-function MetricRow({ label, value }: { label: string; value: string }) {
+function CommandMetric({ label, value }: { label: string; value: string }) {
   return (
-    <div className="flex items-center justify-between border-b border-white/8 pb-3">
-      <span className="font-mono text-[10px] uppercase tracking-[0.18em] text-zinc-500">
+    <div>
+      <p className="mb-3 block font-mono text-[10px] uppercase tracking-[0.18em] text-zinc-500">
         {label}
-      </span>
-      <span className="font-mono text-base text-white">{value}</span>
+      </p>
+      <div className="pixel-box flex min-h-[3.6rem] items-center bg-white/5 px-4 py-3">
+        <p className="font-[family-name:var(--font-display)] text-2xl font-semibold leading-none tracking-[-0.04em] text-white">
+          {value}
+        </p>
+      </div>
     </div>
   );
 }
 
-function SummaryPanel({
+function CompareRowItem({
   label,
   value,
-  note,
+  className = "font-mono text-sm text-white",
 }: {
   label: string;
   value: string;
-  note: string;
+  className?: string;
 }) {
   return (
-    <div className="border border-white/8 bg-white/3 p-4">
-      <p className="font-mono text-[10px] uppercase tracking-[0.18em] text-zinc-500">
+    <div className="min-w-0">
+      <p className="font-mono text-[10px] uppercase tracking-[0.18em] text-zinc-500 md:hidden">
         {label}
       </p>
-      <p className="mt-2 font-[family-name:var(--font-display)] text-2xl font-semibold tracking-[-0.04em] text-white">
-        {value}
-      </p>
-      <p className="mt-2 text-xs leading-6 text-zinc-500">{note}</p>
-    </div>
-  );
-}
-
-function InfoCard({
-  title,
-  value,
-  note,
-}: {
-  title: string;
-  value: string;
-  note: string;
-}) {
-  return (
-    <div className="border border-white/8 bg-white/4 p-4">
-      <p className="font-mono text-[10px] uppercase tracking-[0.18em] text-zinc-500">
-        {title}
-      </p>
-      <p className="mt-2 text-sm leading-7 text-white">{value}</p>
-      <p className="mt-2 text-xs leading-6 text-zinc-500">{note}</p>
-    </div>
-  );
-}
-
-function CompareMetric({ label, value }: { label: string; value: string }) {
-  return (
-    <div>
-      <p className="font-mono text-[10px] uppercase tracking-[0.18em] text-zinc-500">
-        {label}
-      </p>
-      <p className="mt-2 font-mono text-xl tracking-[-0.04em] text-white">
+      <p className={`mt-2 truncate md:mt-0 ${className}`.trim()}>
         {value}
       </p>
     </div>
@@ -1058,34 +852,6 @@ function parseBreakEvenLabel(value: string) {
   }
 
   return value.includes("hours") ? number / 24 : number;
-}
-
-function TxCard({
-  href,
-  label,
-  value,
-}: {
-  href: string;
-  label: string;
-  value: string;
-}) {
-  return (
-    <a
-      href={href}
-      target="_blank"
-      rel="noreferrer"
-      className="border border-white/8 bg-white/3 p-4 transition hover:border-[var(--color-accent)]/40 hover:bg-white/5"
-    >
-      <p className="font-mono text-[10px] uppercase tracking-[0.18em] text-zinc-500">
-        {label}
-      </p>
-      <p className="mt-2 font-mono text-sm text-white">{value}</p>
-    </a>
-  );
-}
-
-function buildExplorerUrl(hash: Hash) {
-  return `https://basescan.org/tx/${hash}`;
 }
 
 function formatChainLabel(chainId: number) {

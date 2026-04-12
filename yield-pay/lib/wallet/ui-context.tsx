@@ -14,11 +14,13 @@ import { formatEvmAddress } from "./format";
 type WalletUiContextValue = {
   isOpen: boolean;
   evmAddress: string | null;
+  evmConnectorName: string | null;
   evmLabel: string | null;
   open: () => void;
   close: () => void;
   toggle: () => void;
   connectEvm: () => void;
+  connectInjectedWallet: () => void;
   disconnectEvm: () => void;
 };
 
@@ -46,28 +48,41 @@ export function WalletUiProvider({
 }: WalletUiProviderProps) {
   const [isOpen, setIsOpen] = useState(initialOpen);
   const hasHydrated = useHasHydrated();
-  const { address, isConnected } = useAccount();
+  const { address, connector, isConnected } = useAccount();
   const { connect, connectors } = useConnect();
   const { disconnect } = useDisconnect();
 
   const evmAddress = hasHydrated && isConnected ? address ?? null : null;
+  const evmConnectorName =
+    hasHydrated && isConnected ? connector?.name ?? null : null;
+
+  const connectWithType = (type: string, fallback?: string) => {
+    const primaryConnector = connectors.find((item) => item.type === type);
+    const fallbackConnector = fallback
+      ? connectors.find((item) => item.type === fallback)
+      : undefined;
+    const connectorToUse = primaryConnector ?? fallbackConnector ?? connectors[0];
+
+    if (connectorToUse) {
+      connect({ connector: connectorToUse });
+      setIsOpen(false);
+    }
+  };
 
   const value: WalletUiContextValue = {
     isOpen,
     evmAddress,
+    evmConnectorName,
     evmLabel: formatEvmAddress(evmAddress),
     open: () => setIsOpen(true),
     close: () => setIsOpen(false),
     toggle: () => setIsOpen((current) => !current),
-    connectEvm: () => {
-      const connector =
-        connectors.find((item) => item.type === "injected") ?? connectors[0];
-
-      if (connector) {
-        connect({ connector });
-      }
+    connectEvm: () => connectWithType("injected", "walletConnect"),
+    connectInjectedWallet: () => connectWithType("injected", "walletConnect"),
+    disconnectEvm: () => {
+      setIsOpen(false);
+      disconnect();
     },
-    disconnectEvm: () => disconnect(),
   };
 
   return (

@@ -1,7 +1,5 @@
 "use client";
 
-import { Wallet } from "lucide-react";
-
 import { TerminalButton } from "@/components/shared/terminal-button";
 import { formatWalletSummary } from "@/lib/wallet/format";
 import { useWalletUi } from "@/lib/wallet/ui-context";
@@ -21,7 +19,6 @@ export function ConnectWalletButton({
   return (
     <div className="relative">
       <TerminalButton className={buttonClassName} onClick={toggle}>
-        <Wallet className="size-4" />
         {formatWalletSummary({ evmAddress })}
       </TerminalButton>
       <ConnectWalletPopover />

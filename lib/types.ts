@@ -3,6 +3,10 @@ export type Vault = {
   name: string;
   protocol: string;
   network: string;
+  category?: "recommend" | "lending" | "vaults" | "liquid-staking" | "yield" | "staking";
+  targetAsset?: string;
+  targetChainId?: number;
+  vaultAddress?: string;
   apy: string;
   estGas: string;
   dailyYield: string;

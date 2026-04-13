@@ -2,7 +2,7 @@
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { RainbowKitProvider, darkTheme } from "@rainbow-me/rainbowkit";
-import { StrictMode, useState } from "react";
+import { StrictMode, useState, useSyncExternalStore } from "react";
 import { WagmiProvider } from "wagmi";
 import { base } from "wagmi/chains";
 
@@ -29,23 +29,40 @@ function makeQueryClient() {
   });
 }
 
+function subscribeToHydration() {
+  return () => undefined;
+}
+
+function useHasHydrated() {
+  return useSyncExternalStore(
+    subscribeToHydration,
+    () => true,
+    () => false,
+  );
+}
+
 export function Providers({ children }: { children: React.ReactNode }) {
   const [queryClient] = useState(() => makeQueryClient());
+  const hasHydrated = useHasHydrated();
 
   return (
     <StrictMode>
-      <WagmiProvider config={config}>
+      <WagmiProvider config={config} reconnectOnMount={false}>
         <QueryClientProvider client={queryClient}>
-          <RainbowKitProvider
-            initialChain={base}
-            theme={darkTheme({
-              accentColor: "#00ff9d",
-              accentColorForeground: "#032616",
-              borderRadius: "small",
-            })}
-          >
+          {hasHydrated ? (
+            <RainbowKitProvider
+              initialChain={base}
+              theme={darkTheme({
+                accentColor: "#00ff9d",
+                accentColorForeground: "#032616",
+                borderRadius: "small",
+              })}
+            >
+              <WalletUiProvider>{children}</WalletUiProvider>
+            </RainbowKitProvider>
+          ) : (
             <WalletUiProvider>{children}</WalletUiProvider>
-          </RainbowKitProvider>
+          )}
         </QueryClientProvider>
       </WagmiProvider>
     </StrictMode>

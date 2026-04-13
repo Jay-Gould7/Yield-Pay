@@ -17,14 +17,13 @@ import { WalletUiProvider } from "@/lib/wallet/ui-context";
 import { ConnectWalletPopover } from "./connect-wallet-popover";
 
 describe("ConnectWalletPopover", () => {
-  it("shows the connected EVM summary and the deferred Solana note", () => {
+  it("stays hidden when wallet UI is modal-driven", () => {
     render(
       <WalletUiProvider initialOpen>
         <ConnectWalletPopover />
       </WalletUiProvider>,
     );
 
-    expect(screen.getByText("EVM 0x1234...5678")).toBeInTheDocument();
-    expect(screen.getByText("Solana coming later")).toBeInTheDocument();
+    expect(screen.queryByText("Wallet access")).not.toBeInTheDocument();
   });
 });

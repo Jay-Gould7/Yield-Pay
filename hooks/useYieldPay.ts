@@ -1,13 +1,13 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import axios, { AxiosError } from "axios";
 import { parseUnits, type Address } from "viem";
 import { useAccount } from "wagmi";
 
-import { CHAINS, LI_FI_API, TOKENS, UI } from "@/lib/constants";
+import { CHAINS, TOKENS, UI } from "@/lib/constants";
 
-export type YieldPaySourceToken = "USDC" | "ETH";
+export type YieldPaySourceToken = "USDC" | "ETH" | "MATIC" | "BNB" | "AVAX";
 
 export type UseYieldPayParams = {
   amount?: string;
@@ -127,18 +127,75 @@ type UseYieldPayState = {
   isLoading: boolean;
 };
 
-const BASE_SOURCE_TOKENS: Record<YieldPaySourceToken, ResolvedSourceToken> = {
-  USDC: {
+const USDC_SOURCE_TOKENS_BY_CHAIN: Partial<Record<number, ResolvedSourceToken>> = {
+  [CHAINS.ARBITRUM]: {
+    address: TOKENS.USDC_ARB as Address,
+    decimals: 6,
+    isNative: false,
+    symbol: "USDC",
+  },
+  [CHAINS.AVALANCHE]: {
+    address: TOKENS.USDC_AVAX as Address,
+    decimals: 6,
+    isNative: false,
+    symbol: "USDC",
+  },
+  [CHAINS.BASE]: {
     address: TOKENS.USDC_BASE as Address,
     decimals: 6,
     isNative: false,
     symbol: "USDC",
+  },
+  [CHAINS.BSC]: {
+    address: TOKENS.USDC_BSC as Address,
+    decimals: 6,
+    isNative: false,
+    symbol: "USDC",
+  },
+  [CHAINS.ETHEREUM]: {
+    address: TOKENS.USDC_ETH as Address,
+    decimals: 6,
+    isNative: false,
+    symbol: "USDC",
+  },
+  [CHAINS.OPTIMISM]: {
+    address: TOKENS.USDC_OP as Address,
+    decimals: 6,
+    isNative: false,
+    symbol: "USDC",
+  },
+  [CHAINS.POLYGON]: {
+    address: TOKENS.USDC_POL as Address,
+    decimals: 6,
+    isNative: false,
+    symbol: "USDC",
+  },
+};
+
+const NATIVE_SOURCE_TOKENS: Record<Exclude<YieldPaySourceToken, "USDC">, ResolvedSourceToken> = {
+  AVAX: {
+    address: TOKENS.AVAX as Address,
+    decimals: 18,
+    isNative: true,
+    symbol: "AVAX",
+  },
+  BNB: {
+    address: TOKENS.BNB as Address,
+    decimals: 18,
+    isNative: true,
+    symbol: "BNB",
   },
   ETH: {
     address: TOKENS.ETH as Address,
     decimals: 18,
     isNative: true,
     symbol: "ETH",
+  },
+  MATIC: {
+    address: TOKENS.MATIC as Address,
+    decimals: 18,
+    isNative: true,
+    symbol: "MATIC",
   },
 };
 
@@ -185,7 +242,14 @@ function resolveSourceToken(params: UseYieldPayParams): ResolvedSourceToken {
     };
   }
 
-  return BASE_SOURCE_TOKENS[params.fromTokenSymbol ?? "USDC"];
+  if ((params.fromTokenSymbol ?? "USDC") === "USDC") {
+    return (
+      USDC_SOURCE_TOKENS_BY_CHAIN[params.fromChainId ?? CHAINS.BASE] ??
+      USDC_SOURCE_TOKENS_BY_CHAIN[CHAINS.BASE]
+    ) as ResolvedSourceToken;
+  }
+
+  return NATIVE_SOURCE_TOKENS[(params.fromTokenSymbol ?? "ETH") as Exclude<YieldPaySourceToken, "USDC">];
 }
 
 function formatAxiosError(error: unknown) {
@@ -200,8 +264,125 @@ function formatAxiosError(error: unknown) {
   return responseMessage ?? axiosError.message;
 }
 
+export async function fetchYieldPayQuote(
+  params: UseYieldPayParams,
+  fallbackAddress?: Address,
+) {
+  const userAddress = (params.fromAddress ?? fallbackAddress) as Address | undefined;
+
+  if (!userAddress) {
+    throw new Error("A connected wallet address is required to request a quote.");
+  }
+
+  const recipientAddress = (params.toAddress ?? userAddress) as Address;
+  const sourceToken = resolveSourceToken(params);
+  const amount = params.amount ?? "0.02";
+  const amountAtomic = parseUnits(amount, sourceToken.decimals).toString();
+
+  const earnParams = new URLSearchParams({
+    asset: params.targetAsset ?? "USDC",
+    chainId: String(params.toChainId ?? CHAINS.BASE),
+    limit: String(params.vaultLimit ?? 5),
+    minTvlUsd: String(params.minTvlUsd ?? 100000),
+    sortBy: "apy",
+  });
+
+  const earnResponse = await axios.get<EarnVaultResponse>(
+    `/api/lifi/earn-vaults?${earnParams.toString()}`,
+    {
+      headers: getRequestHeaders(),
+    },
+  );
+
+  const availableVaults = normalizeVaults(earnResponse.data).filter(
+    (vault) => vault.isTransactional,
+  );
+
+  if (availableVaults.length === 0) {
+    throw new Error("No depositable vaults were returned for the requested asset.");
+  }
+
+  const requestedVaultAddress = params.targetVaultAddress?.toLowerCase();
+  const requestedProtocol = normalizeProtocolName(params.targetProtocol);
+
+  const selectedVault =
+    availableVaults.find(
+      (vault) => vault.address.toLowerCase() === requestedVaultAddress,
+    ) ??
+    availableVaults.find((vault) => {
+      const protocolName = normalizeProtocolName(vault.protocol.name);
+      const vaultName = normalizeProtocolName(vault.name);
+
+      return requestedProtocol
+        ? protocolName.includes(requestedProtocol) ||
+            vaultName.includes(requestedProtocol)
+        : false;
+    }) ??
+    availableVaults[0];
+
+  if (!selectedVault) {
+    throw new Error("Unable to resolve a target vault for the current request.");
+  }
+
+  const quoteResponse = await axios.get<QuoteResponse>("/api/lifi/quote", {
+    params: {
+      fromAddress: userAddress,
+      fromAmount: amountAtomic,
+      fromChain: params.fromChainId ?? CHAINS.BASE,
+      fromToken: sourceToken.address,
+      slippage: params.slippage ?? UI.DEFAULT_SLIPPAGE,
+      toAddress: recipientAddress,
+      toChain: params.toChainId ?? CHAINS.BASE,
+      toToken: selectedVault.address,
+    },
+  });
+
+  const quote = quoteResponse.data;
+  const totalFeesUsd =
+    sumQuoteCosts(quote.estimate.feeCosts) + sumQuoteCosts(quote.estimate.gasCosts);
+
+  if (!quote.transactionRequest) {
+    throw new Error("Quote response did not include a transactionRequest.");
+  }
+
+  const tokenPriceUsd =
+    quote.action.fromToken?.priceUSD ??
+    (sourceToken.symbol === "USDC" ? "1" : undefined);
+  const principalUsd =
+    params.principalUsdOverride ??
+    Number.parseFloat(amount) * parseUsd(tokenPriceUsd);
+
+  if (!Number.isFinite(principalUsd) || principalUsd <= 0) {
+    throw new Error("Unable to calculate principal USD for the current quote.");
+  }
+
+  const apyDecimal = normalizeApyDecimal(selectedVault.analytics.apy.total);
+  const breakEvenDays = totalFeesUsd / (principalUsd * (apyDecimal / 365));
+
+  return {
+    amount,
+    amountAtomic,
+    approvalAddress: quote.estimate.approvalAddress ?? null,
+    apyDecimal,
+    apyPercent: apyDecimal * 100,
+    availableVaults,
+    breakEvenDays,
+    fromAddress: userAddress,
+    fromChainId: params.fromChainId ?? CHAINS.BASE,
+    fromToken: sourceToken,
+    principalUsd,
+    quoteId: quote.id ?? null,
+    selectedVault,
+    toAddress: recipientAddress,
+    toChainId: params.toChainId ?? CHAINS.BASE,
+    totalFeesUsd,
+    transactionRequest: quote.transactionRequest,
+  } satisfies YieldPayResult;
+}
+
 export function useYieldPay(initialParams: UseYieldPayParams = {}) {
   const { address, isConnected } = useAccount();
+  const initialParamsRef = useRef(initialParams);
   const [state, setState] = useState<UseYieldPayState>({
     data: null,
     error: null,
@@ -209,7 +390,11 @@ export function useYieldPay(initialParams: UseYieldPayParams = {}) {
   });
   const latestRequestId = useRef(0);
 
-  const refresh = async (overrides: Partial<UseYieldPayParams> = {}) => {
+  useEffect(() => {
+    initialParamsRef.current = initialParams;
+  }, [initialParams]);
+
+  const refresh = useCallback(async (overrides: Partial<UseYieldPayParams> = {}) => {
     const params: UseYieldPayParams = {
       amount: "0.02",
       fromChainId: CHAINS.BASE,
@@ -219,7 +404,7 @@ export function useYieldPay(initialParams: UseYieldPayParams = {}) {
       minTvlUsd: 100000,
       vaultLimit: 5,
       slippage: UI.DEFAULT_SLIPPAGE,
-      ...initialParams,
+      ...initialParamsRef.current,
       ...overrides,
     };
 
@@ -232,117 +417,10 @@ export function useYieldPay(initialParams: UseYieldPayParams = {}) {
     }));
 
     try {
-      const userAddress = (params.fromAddress ?? address) as Address | undefined;
-
-      if (!userAddress) {
-        throw new Error("A connected wallet address is required to request a quote.");
-      }
-
-      const recipientAddress = (params.toAddress ?? userAddress) as Address;
-      const sourceToken = resolveSourceToken(params);
-      const amount = params.amount ?? "0.02";
-      const amountAtomic = parseUnits(amount, sourceToken.decimals).toString();
-
-      const earnParams = new URLSearchParams({
-        asset: params.targetAsset ?? "USDC",
-        chainId: String(params.toChainId ?? CHAINS.BASE),
-        limit: String(params.vaultLimit ?? 5),
-        minTvlUsd: String(params.minTvlUsd ?? 100000),
-        sortBy: "apy",
-      });
-
-      const earnResponse = await axios.get<EarnVaultResponse>(
-        `https://earn.li.fi/v1/earn/vaults?${earnParams.toString()}`,
-        {
-          headers: getRequestHeaders(),
-        },
+      const nextResult = await fetchYieldPayQuote(
+        params,
+        address as Address | undefined,
       );
-
-      const availableVaults = normalizeVaults(earnResponse.data).filter(
-        (vault) => vault.isTransactional,
-      );
-
-      if (availableVaults.length === 0) {
-        throw new Error("No depositable vaults were returned for the requested asset.");
-      }
-
-      const requestedVaultAddress = params.targetVaultAddress?.toLowerCase();
-      const requestedProtocol = normalizeProtocolName(params.targetProtocol);
-
-      const selectedVault =
-        availableVaults.find(
-          (vault) => vault.address.toLowerCase() === requestedVaultAddress,
-        ) ??
-        availableVaults.find((vault) => {
-          const protocolName = normalizeProtocolName(vault.protocol.name);
-          const vaultName = normalizeProtocolName(vault.name);
-
-          return requestedProtocol
-            ? protocolName.includes(requestedProtocol) ||
-                vaultName.includes(requestedProtocol)
-            : false;
-        }) ??
-        availableVaults[0];
-
-      if (!selectedVault) {
-        throw new Error("Unable to resolve a target vault for the current request.");
-      }
-
-      const quoteResponse = await axios.get<QuoteResponse>(LI_FI_API.QUOTE_URL, {
-        headers: getRequestHeaders(),
-        params: {
-          fromAddress: userAddress,
-          fromAmount: amountAtomic,
-          fromChain: params.fromChainId ?? CHAINS.BASE,
-          fromToken: sourceToken.address,
-          slippage: params.slippage ?? UI.DEFAULT_SLIPPAGE,
-          toAddress: recipientAddress,
-          toChain: params.toChainId ?? CHAINS.BASE,
-          toToken: selectedVault.address,
-        },
-      });
-
-      const quote = quoteResponse.data;
-      const totalFeesUsd =
-        sumQuoteCosts(quote.estimate.feeCosts) + sumQuoteCosts(quote.estimate.gasCosts);
-
-      if (!quote.transactionRequest) {
-        throw new Error("Quote response did not include a transactionRequest.");
-      }
-
-      const tokenPriceUsd =
-        quote.action.fromToken?.priceUSD ??
-        (sourceToken.symbol === "USDC" ? "1" : undefined);
-      const principalUsd =
-        params.principalUsdOverride ??
-        Number.parseFloat(amount) * parseUsd(tokenPriceUsd);
-
-      if (!Number.isFinite(principalUsd) || principalUsd <= 0) {
-        throw new Error("Unable to calculate principal USD for the current quote.");
-      }
-
-      const apyDecimal = selectedVault.analytics.apy.total;
-      const breakEvenDays = totalFeesUsd / (principalUsd * (apyDecimal / 365));
-
-      const nextResult: YieldPayResult = {
-        amount,
-        amountAtomic,
-        approvalAddress: quote.estimate.approvalAddress ?? null,
-        apyDecimal,
-        apyPercent: apyDecimal * 100,
-        availableVaults,
-        breakEvenDays,
-        fromAddress: userAddress,
-        fromChainId: params.fromChainId ?? CHAINS.BASE,
-        fromToken: sourceToken,
-        principalUsd,
-        quoteId: quote.id ?? null,
-        selectedVault,
-        toAddress: recipientAddress,
-        toChainId: params.toChainId ?? CHAINS.BASE,
-        totalFeesUsd,
-        transactionRequest: quote.transactionRequest,
-      };
 
       if (latestRequestId.current === requestId) {
         setState({
@@ -366,16 +444,22 @@ export function useYieldPay(initialParams: UseYieldPayParams = {}) {
 
       return null;
     }
-  };
+  }, [address]);
 
-  const reset = () => {
+  const reset = useCallback(() => {
     latestRequestId.current += 1;
-    setState({
-      data: null,
-      error: null,
-      isLoading: false,
+    setState((current) => {
+      if (!current.data && !current.error && !current.isLoading) {
+        return current;
+      }
+
+      return {
+        data: null,
+        error: null,
+        isLoading: false,
+      };
     });
-  };
+  }, []);
 
   return {
     address,
@@ -386,4 +470,12 @@ export function useYieldPay(initialParams: UseYieldPayParams = {}) {
     refresh,
     reset,
   };
+}
+
+function normalizeApyDecimal(value: number) {
+  if (!Number.isFinite(value) || value <= 0) {
+    return 0;
+  }
+
+  return value > 1 ? value / 100 : value;
 }

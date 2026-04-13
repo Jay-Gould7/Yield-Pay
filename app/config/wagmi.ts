@@ -11,7 +11,24 @@ const supportedChains = [base] as const;
 export const config = createConfig({
   chains: supportedChains,
   connectors: [
-    injected(),
+    injected({
+      target: {
+        id: 'okx',
+        name: 'OKX Wallet',
+        provider(window) {
+          const okxProvider =
+            window?.okxwallet?.ethereum ??
+            window?.ethereum?.providers?.find(
+              (provider) => provider?.isOkxWallet || provider?.isOKExWallet,
+            ) ??
+            (window?.ethereum?.isOkxWallet || window?.ethereum?.isOKExWallet
+              ? window.ethereum
+              : undefined)
+
+          return okxProvider
+        },
+      },
+    }),
     ...(projectId ? [walletConnect({ projectId })] : []),
   ],
   transports: {

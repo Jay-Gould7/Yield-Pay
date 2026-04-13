@@ -2,11 +2,12 @@
 
 import { ParallaxPxlKitIcon } from "@pxlkit/core";
 import {
+  useCallback,
   useEffect,
   useEffectEvent,
   useMemo,
+  useRef,
   useState,
-  type ReactNode,
 } from "react";
 import { erc20Abi, type Address, type Hash } from "viem";
 import {
@@ -20,19 +21,21 @@ import {
   useSwitchChain,
   useWriteContract,
 } from "wagmi";
-import { base } from "wagmi/chains";
 
-import { useYieldPay } from "@/hooks/useYieldPay";
+import {
+  AssetInventory,
+  type AssetQuoteSelection,
+} from "@/components/home/asset-inventory";
+import { QuoteModal } from "@/components/home/quote-modal";
+import { useYieldPay, type YieldPaySourceToken } from "@/hooks/useYieldPay";
+import { useVaultCatalog } from "@/hooks/use-vault-catalog";
 import { RetroTV } from "@/components/icons/retro-tv";
-import { VaultIcon } from "@/components/home/VaultIcon";
-import Magnet from "@/components/rb/Magnet";
 import Shuffle from "@/components/rb/Shuffle";
-import { SegmentedProgressBar } from "@/components/shared/SegmentedProgressBar";
-import { TransactionAnimation } from "@/components/shared/TransactionAnimation";
 import { TerminalButton } from "@/components/shared/terminal-button";
 import { ConnectWalletButton } from "@/components/wallet/connect-wallet-button";
 import {
   calculateBreakEvenEstimate,
+  deriveBreakEvenDaysFromYieldBasis,
   formatBreakEvenWindow,
   formatUsd,
 } from "@/lib/calculations";
@@ -41,9 +44,11 @@ import {
   executionPhases,
   homeVaults,
   sourceChains,
-  sourceTokens,
-  type SourceTokenId,
 } from "@/lib/home-data";
+import {
+  classifyVaultCategory,
+  type VaultCategory,
+} from "@/lib/vault-catalog";
 import { useWalletUi } from "@/lib/wallet/ui-context";
 
 type HomeScreenProps = {
@@ -53,6 +58,7 @@ type HomeScreenProps = {
 };
 
 type CompareItem = {
+  basisAmountUsd: number;
   dailyYieldUsd: number;
   estimatedCostUsd: number;
   id: string;
@@ -60,6 +66,8 @@ type CompareItem = {
   label: string;
   note: string;
   protocol: string;
+  targetAsset?: string;
+  targetChainId?: number;
   value: string;
   vaultAddress?: Address;
 };
@@ -74,22 +82,22 @@ export function HomeScreen({
 }: HomeScreenProps) {
   const { evmAddress, connectEvm } = useWalletUi();
   const { address: accountAddress, chainId } = useAccount();
-  const basePublicClient = usePublicClient({ chainId: base.id });
   const { refresh, reset, data: liveQuote, error: liveError, isLoading: isQuoteLoading } =
     useYieldPay();
   const { switchChainAsync } = useSwitchChain();
   const { sendTransactionAsync } = useSendTransaction();
   const { writeContractAsync } = useWriteContract();
-  const [tokenId, setTokenId] = useState<SourceTokenId>("usdc");
-  const [amountInput, setAmountInput] = useState("0.02");
   const [selectedProtocol, setSelectedProtocol] = useState(
-    homeVaults.find((vault) => vault.id === initialVaultId)?.protocol ??
-      homeVaults[0]?.protocol ??
-      "Aave",
+    homeVaults.find((vault) => vault.id === initialVaultId)?.protocol ?? "",
   );
   const [selectedVaultAddress, setSelectedVaultAddress] = useState<Address | null>(
     null,
   );
+  const [selectedTargetAsset, setSelectedTargetAsset] = useState("USDC");
+  const [selectedTargetChainId, setSelectedTargetChainId] = useState<number>(CHAINS.BASE);
+  const [activeVaultCategory, setActiveVaultCategory] =
+    useState<VaultCategory>("recommend");
+  const [assetSelections, setAssetSelections] = useState<AssetQuoteSelection[]>([]);
   const [executionStep, setExecutionStep] = useState<number | null>(
     initialExecutionOpen ? 0 : null,
   );
@@ -98,14 +106,34 @@ export function HomeScreen({
   const [approvalHash, setApprovalHash] = useState<Hash | null>(null);
   const [routeHash, setRouteHash] = useState<Hash | null>(null);
   const [isExecuting, setIsExecuting] = useState(false);
+  const [isQuoteModalOpen, setIsQuoteModalOpen] = useState(false);
+  const [sponsorAddress, setSponsorAddress] = useState<string | null>(null);
+  const [sponsorBalanceEth, setSponsorBalanceEth] = useState<string | null>(null);
+  const lastSelectionKeyRef = useRef<string | null>(null);
 
-  const chain = sourceChains[0];
-  const token = sourceTokens.find((item) => item.id === tokenId) ?? sourceTokens[0];
-  const parsedAmount = Number(amountInput.replace(/,/g, ""));
+  const selectedAsset = useMemo(
+    () =>
+      assetSelections.find((selection) => {
+        const amount = Number(selection.amount.replace(/,/g, ""));
+        return Number.isFinite(amount) && amount > 0;
+      }) ?? null,
+    [assetSelections],
+  );
+  const selectedSourceChainId = selectedAsset?.chainId ?? CHAINS.BASE;
+  const selectedSourceChain =
+    sourceChains.find((chainOption) => chainOption.chainId === selectedSourceChainId) ??
+    sourceChains[0];
+  const sourcePublicClient = usePublicClient({ chainId: selectedSourceChainId });
+  const parsedAmount = Number(selectedAsset?.amount.replace(/,/g, "") ?? "");
   const amountValue = Number.isFinite(parsedAmount) && parsedAmount > 0 ? parsedAmount : 0;
-  const normalizedAmount = amountValue > 0 ? amountInput.trim() : "";
+  const normalizedAmount = amountValue > 0 ? selectedAsset?.amount.trim() ?? "" : "";
   const walletAddress = (accountAddress ?? evmAddress ?? undefined) as Address | undefined;
-  const sourceTokenSymbol = tokenId === "eth" ? "ETH" : "USDC";
+  const sourceTokenSymbol = normalizeSourceTokenSymbol(selectedAsset?.tokenSymbol);
+  const {
+    error: vaultCatalogError,
+    isLoading: isVaultCatalogLoading,
+    vaults: catalogVaults,
+  } = useVaultCatalog([]);
 
   const fallbackVaultOutcomes = useMemo(
     () =>
@@ -116,12 +144,18 @@ export function HomeScreen({
             amountUsd: amountValue,
             apy: vault.apy,
             baseCost: vault.baseCost,
-            chainMultiplier: chain.costMultiplier,
-            tokenMultiplier: token.costMultiplier,
+            chainMultiplier: selectedSourceChain.costMultiplier,
+            tokenMultiplier:
+              selectedAsset?.tokenSymbol === selectedSourceChain.nativeSymbol ? 1.28 : 1,
           }),
         }))
         .sort((left, right) => left.estimate.breakEvenDays - right.estimate.breakEvenDays),
-    [amountValue, chain.costMultiplier, token.costMultiplier],
+    [
+      amountValue,
+      selectedAsset?.tokenSymbol,
+      selectedSourceChain.costMultiplier,
+      selectedSourceChain.nativeSymbol,
+    ],
   );
 
   const fallbackRecommendation = fallbackVaultOutcomes[0];
@@ -136,19 +170,21 @@ export function HomeScreen({
 
     return [...liveQuote.availableVaults]
       .map((vault) => {
-        const dailyYieldUsd = liveQuote.principalUsd * (vault.analytics.apy.total / 365);
+        const apyDecimal = normalizeApyDecimal(vault.analytics.apy.total);
+        const dailyYieldUsd = liveQuote.principalUsd * (apyDecimal / 365);
         const breakEvenDays =
           dailyYieldUsd > 0
             ? liveQuote.totalFeesUsd / dailyYieldUsd
             : Number.POSITIVE_INFINITY;
 
         return {
+          basisAmountUsd: liveQuote.principalUsd,
           dailyYieldUsd,
           estimatedCostUsd: liveQuote.totalFeesUsd,
           id: vault.address,
           isLive: true,
           label: vault.name,
-          note: "Live Earn API vault on Base using the current quote fee snapshot.",
+          note: `Live Earn API vault using the current ${selectedSourceChain.label} quote fee snapshot.`,
           protocol: vault.protocol.name,
           value: formatBreakEvenWindow(breakEvenDays),
           vaultAddress: vault.address,
@@ -160,11 +196,12 @@ export function HomeScreen({
 
         return leftDays - rightDays;
       });
-  }, [liveQuote]);
+  }, [liveQuote, selectedSourceChain.label]);
 
   const fallbackCompareItems = useMemo<CompareItem[]>(
     () =>
       fallbackVaultOutcomes.map((item) => ({
+        basisAmountUsd: amountValue,
         dailyYieldUsd: item.estimate.dailyYieldUsd,
         estimatedCostUsd: item.estimate.estimatedCostUsd,
         id: item.vault.id,
@@ -174,32 +211,120 @@ export function HomeScreen({
         protocol: item.vault.protocol,
         value: formatBreakEvenWindow(item.estimate.breakEvenDays),
       })),
-    [fallbackVaultOutcomes],
+    [amountValue, fallbackVaultOutcomes],
   );
 
-  const compareItems: CompareItem[] = liveCompareItems ?? fallbackCompareItems;
+  const catalogCompareItems = useMemo<CompareItem[]>(
+    () =>
+      catalogVaults.map((vault) => ({
+        basisAmountUsd: 10_000,
+        dailyYieldUsd: parseUsdLabel(vault.dailyYield),
+        estimatedCostUsd: parseUsdLabel(vault.estGas),
+        id: vault.id,
+        isLive: true,
+        label: vault.name,
+        note: vault.summary,
+        protocol: vault.protocol,
+        targetAsset: vault.targetAsset,
+        targetChainId: vault.targetChainId,
+        value: vault.breakEven,
+        vaultAddress: vault.vaultAddress as Address | undefined,
+      })),
+    [catalogVaults],
+  );
+
+  const compareItems: CompareItem[] = catalogCompareItems.length
+    ? catalogCompareItems
+    : liveCompareItems ?? fallbackCompareItems;
+  const selectedCompareItem =
+    compareItems.find((item) =>
+      item.vaultAddress
+        ? selectedVaultAddress === item.vaultAddress
+        : selectedProtocol === item.protocol,
+    ) ?? null;
+  const availableVaultCategories = useMemo(
+    () => getAvailableVaultCategories(compareItems),
+    [compareItems],
+  );
+  const visibleVaultCategory = availableVaultCategories.includes(activeVaultCategory)
+    ? activeVaultCategory
+    : "recommend";
+  const visibleCompareItems = useMemo(
+    () =>
+      visibleVaultCategory === "recommend"
+        ? compareItems.slice(0, 6)
+        : compareItems.filter(
+            (item) => getCompareItemCategory(item) === visibleVaultCategory,
+          ),
+    [compareItems, visibleVaultCategory],
+  );
   const activeProtocol =
-    selectedProtocol || selectedFallbackOutcome?.vault.protocol || homeVaults[0]?.protocol;
-  const activeVaultName = liveQuote?.selectedVault.name ?? selectedFallbackOutcome?.vault.name;
+    selectedProtocol || selectedCompareItem?.protocol || selectedFallbackOutcome?.vault.protocol || "";
+  const activeVaultName =
+    liveQuote?.selectedVault.name ??
+    selectedCompareItem?.label ??
+    selectedFallbackOutcome?.vault.name;
   const activeProtocolName =
-    liveQuote?.selectedVault.protocol.name ?? selectedFallbackOutcome?.vault.protocol;
+    liveQuote?.selectedVault.protocol.name ??
+    selectedCompareItem?.protocol ??
+    selectedFallbackOutcome?.vault.protocol;
   const activeNetwork =
-    liveQuote ? `Chain ${liveQuote.selectedVault.chainId}` : selectedFallbackOutcome?.vault.network;
+    liveQuote
+      ? `Chain ${liveQuote.selectedVault.chainId}`
+      : selectedCompareItem?.targetChainId
+        ? formatChainLabel(selectedCompareItem.targetChainId)
+        : selectedFallbackOutcome?.vault.network;
   const activeApyPercent =
-    liveQuote?.apyPercent ?? selectedFallbackOutcome?.vault.apy ?? 0;
+    liveQuote?.apyPercent ??
+    (selectedCompareItem ? parsePercentLabel(deriveApyFromDailyYield(selectedCompareItem)) : null) ??
+    selectedFallbackOutcome?.vault.apy ??
+    0;
   const activeCostUsd =
-    liveQuote?.totalFeesUsd ?? selectedFallbackOutcome?.estimate.estimatedCostUsd ?? 0;
+    liveQuote?.totalFeesUsd ??
+    selectedCompareItem?.estimatedCostUsd ??
+    selectedFallbackOutcome?.estimate.estimatedCostUsd ??
+    0;
+  const selectedCompareBreakEvenDays = toFiniteNumberOrNull(
+    selectedCompareItem
+      ? deriveBreakEvenDaysFromYieldBasis({
+          amountUsd: amountValue,
+          basisAmountUsd: selectedCompareItem.basisAmountUsd,
+          dailyYieldUsd: selectedCompareItem.dailyYieldUsd,
+          estimatedCostUsd: selectedCompareItem.estimatedCostUsd,
+        })
+      : null,
+  );
+  const liveBreakEvenDays = toFiniteNumberOrNull(liveQuote?.breakEvenDays);
+  const fallbackBreakEvenDays = toFiniteNumberOrNull(
+    selectedFallbackOutcome?.estimate.breakEvenDays,
+  );
   const activeBreakEvenDays =
-    liveQuote?.breakEvenDays ?? selectedFallbackOutcome?.estimate.breakEvenDays ?? 0;
-  const activeBreakEvenLabel = formatBreakEvenWindow(activeBreakEvenDays);
+    liveBreakEvenDays ??
+    selectedCompareBreakEvenDays ??
+    fallbackBreakEvenDays ??
+    0;
+  const activeBreakEvenLabel =
+    selectedAsset && selectedCompareItem
+      ? formatBreakEvenWindow(activeBreakEvenDays)
+      : "......";
+  const sponsorBalanceLabel = useMemo(() => {
+    if (!sponsorBalanceEth) {
+      return "Unavailable";
+    }
+
+    const parsed = Number.parseFloat(sponsorBalanceEth);
+    if (!Number.isFinite(parsed)) {
+      return "Unavailable";
+    }
+
+    return `${parsed.toFixed(6)} ETH`;
+  }, [sponsorBalanceEth]);
   const activeDailyYieldUsd =
     liveQuote?.principalUsd && liveQuote?.apyDecimal
       ? liveQuote.principalUsd * (liveQuote.apyDecimal / 365)
-      : selectedFallbackOutcome?.estimate.dailyYieldUsd ?? 0;
+      : selectedCompareItem?.dailyYieldUsd ?? selectedFallbackOutcome?.estimate.dailyYieldUsd ?? 0;
   const activePrincipalUsd =
     liveQuote?.principalUsd ?? amountValue;
-  const activeVaultTokenAddress =
-    liveQuote?.selectedVault.address ?? selectedVaultAddress ?? undefined;
   const recoveryProgress24h =
     activeCostUsd > 0 ? Math.min(100, (activeDailyYieldUsd / activeCostUsd) * 100) : 0;
   const hasExecutableQuote = Boolean(liveQuote?.transactionRequest);
@@ -223,17 +348,21 @@ export function HomeScreen({
     executionStep === executionPhasesWithNotes.length - 1 && !isExecuting && !executionError;
   const ctaLabel = !evmAddress
     ? "Connect Wallet To Start"
-    : !hasExecutableQuote && isQuoteLoading
-      ? "Refreshing Live Quote"
-      : !hasExecutableQuote
-        ? "Waiting For Live Quote"
-        : isExecutionRunning && executionStep !== null
-          ? executionPhasesWithNotes[executionStep].title
-          : isExecutionComplete
-            ? "Yield Position Active"
-            : executionError
-              ? "Retry Route"
-              : "Start Earning";
+    : !selectedAsset
+      ? "Select Source Asset"
+      : !selectedCompareItem
+        ? "Select Target Vault"
+        : !hasExecutableQuote && isQuoteLoading
+          ? "Refreshing Live Quote"
+          : !hasExecutableQuote
+            ? "Waiting For Live Quote"
+            : isExecutionRunning && executionStep !== null
+              ? executionPhasesWithNotes[executionStep].title
+              : isExecutionComplete
+                ? "Yield Position Active"
+                : executionError
+                  ? "Retry Route"
+                  : "Start Earning";
   const routeStateLabel = isExecutionComplete
     ? "Confirmed"
     : isExecutionRunning
@@ -243,20 +372,16 @@ export function HomeScreen({
         : isQuoteLoading
           ? "Building"
           : "Pending";
-  const isPrimaryButtonDisabled =
-    amountValue <= 0 ||
-    isExecutionRunning ||
-    (Boolean(evmAddress) && !hasExecutableQuote && isQuoteLoading);
   const isVaultMatrixHighlighted = initialCompareOpen || Boolean(selectedVaultAddress);
 
-  const resetExecutionState = () => {
+  const resetExecutionState = useCallback(() => {
     setApprovalHash(null);
     setExecutionError(null);
     setExecutionNotes({});
     setExecutionStep(null);
     setIsExecuting(false);
     setRouteHash(null);
-  };
+  }, []);
 
   const setExecutionNote = (phaseId: ExecutionPhaseId, detail: string) => {
     setExecutionNotes((current) => ({
@@ -266,11 +391,11 @@ export function HomeScreen({
   };
 
   const readRouteAllowance = async (owner: Address, spender: Address, tokenAddress: Address) => {
-    if (!basePublicClient) {
-      throw new Error("Base public client is unavailable.");
+    if (!sourcePublicClient) {
+      throw new Error(`${formatChainLabel(selectedSourceChainId)} public client is unavailable.`);
     }
 
-    return basePublicClient.readContract({
+    return sourcePublicClient.readContract({
       abi: erc20Abi,
       address: tokenAddress,
       args: [owner, spender],
@@ -278,24 +403,78 @@ export function HomeScreen({
     });
   };
 
+  useEffect(() => {
+    let isCancelled = false;
+
+    const fetchSponsorBalance = async () => {
+      try {
+        const response = await fetch("/api/gas-sponsor?chainId=1");
+        if (!response.ok) {
+          return;
+        }
+
+        const payload = (await response.json()) as {
+          address?: string;
+          balanceEth?: string;
+        };
+
+        if (isCancelled) {
+          return;
+        }
+
+        setSponsorAddress(payload.address ?? null);
+        setSponsorBalanceEth(payload.balanceEth ?? null);
+      } catch {
+        if (!isCancelled) {
+          setSponsorBalanceEth(null);
+        }
+      }
+    };
+
+    void fetchSponsorBalance();
+
+    const timer = window.setInterval(() => {
+      void fetchSponsorBalance();
+    }, 30_000);
+
+    return () => {
+      isCancelled = true;
+      window.clearInterval(timer);
+    };
+  }, []);
+
   const requestLiveQuote = useEffectEvent(async () => {
-    if (!walletAddress || !normalizedAmount || !activeProtocol) {
+    if (
+      !walletAddress ||
+      !normalizedAmount ||
+      !activeProtocol ||
+      !selectedAsset ||
+      !selectedCompareItem
+    ) {
       return;
     }
 
     await refresh({
       amount: normalizedAmount,
-      fromChainId: CHAINS.BASE,
+      fromChainId: selectedAsset.chainId,
+      fromTokenAddress: selectedAsset.tokenAddress as Address,
+      fromTokenDecimals: selectedAsset.tokenDecimals,
       fromTokenSymbol: sourceTokenSymbol,
-      targetAsset: "USDC",
       targetProtocol: activeProtocol,
       targetVaultAddress: selectedVaultAddress ?? undefined,
-      toChainId: CHAINS.BASE,
+      targetAsset: selectedTargetAsset,
+      toChainId: selectedTargetChainId,
     });
   });
 
   useEffect(() => {
-    if (!walletAddress || !normalizedAmount || !activeProtocol) {
+    if (
+      !walletAddress ||
+      !normalizedAmount ||
+      !activeProtocol ||
+      !selectedAsset ||
+      !selectedCompareItem
+    ) {
       return;
     }
 
@@ -304,7 +483,16 @@ export function HomeScreen({
     }, 450);
 
     return () => window.clearTimeout(timer);
-  }, [activeProtocol, normalizedAmount, selectedVaultAddress, tokenId, walletAddress]);
+  }, [
+    activeProtocol,
+    normalizedAmount,
+    selectedAsset,
+    selectedCompareItem,
+    selectedVaultAddress,
+    selectedTargetAsset,
+    selectedTargetChainId,
+    walletAddress,
+  ]);
 
   useEffect(() => {
     if (walletAddress) {
@@ -357,32 +545,50 @@ export function HomeScreen({
     walletAddress,
   ]);
 
-  const handleAmountChange = (value: string) => {
-    reset();
-    resetExecutionState();
-    setAmountInput(value);
-  };
+  const handleAssetSelectionChange = useCallback((selection: AssetQuoteSelection[]) => {
+    const nextSelectionKey = JSON.stringify(selection);
 
-  const handleTokenChange = (value: string) => {
+    if (nextSelectionKey === lastSelectionKeyRef.current) {
+      return;
+    }
+
+    lastSelectionKeyRef.current = nextSelectionKey;
     reset();
     resetExecutionState();
-    setTokenId(value as SourceTokenId);
-  };
+    setAssetSelections(selection);
+  }, [reset, resetExecutionState]);
 
   const handleCompareSelection = (item: CompareItem) => {
     reset();
     resetExecutionState();
     setSelectedProtocol(item.protocol);
     setSelectedVaultAddress(item.vaultAddress ?? null);
+    setSelectedTargetAsset(item.targetAsset ?? "USDC");
+    setSelectedTargetChainId(item.targetChainId ?? CHAINS.BASE);
   };
 
   const handlePrimaryAction = async () => {
+    if (!selectedAsset || !selectedCompareItem || amountValue <= 0) {
+      return;
+    }
+
+    if (!isQuoteModalOpen) {
+      setIsQuoteModalOpen(true);
+      return;
+    }
+
     if (!walletAddress) {
       connectEvm();
       return;
     }
 
-    if (isExecutionRunning || amountValue <= 0) {
+    if (
+      isExecutionRunning ||
+      amountValue <= 0 ||
+      !selectedAsset ||
+      !selectedCompareItem ||
+      !activeProtocol
+    ) {
       return;
     }
 
@@ -391,12 +597,14 @@ export function HomeScreen({
     if (!hasExecutableQuote) {
       const result = await refresh({
         amount: normalizedAmount || "0.02",
-        fromChainId: CHAINS.BASE,
+        fromChainId: selectedAsset.chainId,
+        fromTokenAddress: selectedAsset.tokenAddress as Address,
+        fromTokenDecimals: selectedAsset.tokenDecimals,
         fromTokenSymbol: sourceTokenSymbol,
-        targetAsset: "USDC",
+        targetAsset: selectedTargetAsset,
         targetProtocol: activeProtocol,
         targetVaultAddress: selectedVaultAddress ?? undefined,
-        toChainId: CHAINS.BASE,
+        toChainId: selectedTargetChainId,
       });
 
       if (!result) {
@@ -415,9 +623,9 @@ export function HomeScreen({
     setIsExecuting(true);
     setExecutionNote(
       "wallet",
-      chainId === base.id
-        ? "Wallet connected on Base. Preparing the LI.FI execution payload."
-        : "Switching the connected wallet to Base so the route can execute.",
+      chainId === selectedAsset.chainId
+        ? `Wallet connected on ${formatChainLabel(selectedAsset.chainId)}. Preparing the LI.FI execution payload.`
+        : `Switching the connected wallet to ${formatChainLabel(selectedAsset.chainId)} so the route can execute.`,
     );
 
     try {
@@ -454,7 +662,9 @@ export function HomeScreen({
       if (approvalRequiredByRoute && executableQuote.approvalAddress) {
         setExecutionNote(
           "approval",
-          `Checking ${executableQuote.fromToken.symbol} allowance on Base before execution.`,
+          `Checking ${executableQuote.fromToken.symbol} allowance on ${formatChainLabel(
+            executableQuote.fromChainId,
+          )} before execution.`,
         );
 
         const allowance = await readRouteAllowance(
@@ -493,20 +703,24 @@ export function HomeScreen({
           "approval",
           `Approval submitted: ${formatHashLabel(
             nextApprovalHash,
-          )}. Waiting for Base confirmation.`,
+          )}. Waiting for ${formatChainLabel(executableQuote.fromChainId)} confirmation.`,
         );
 
-        if (!basePublicClient) {
-          throw new Error("Base public client is unavailable.");
+        if (!sourcePublicClient) {
+          throw new Error(
+            `${formatChainLabel(executableQuote.fromChainId)} public client is unavailable.`,
+          );
         }
 
-        await basePublicClient.waitForTransactionReceipt({
+        await sourcePublicClient.waitForTransactionReceipt({
           hash: nextApprovalHash,
         });
 
         setExecutionNote(
           "approval",
-          `Approval confirmed on Base. ${executableQuote.fromToken.symbol} is now spendable for this route.`,
+          `Approval confirmed on ${formatChainLabel(
+            executableQuote.fromChainId,
+          )}. ${executableQuote.fromToken.symbol} is now spendable for this route.`,
         );
       } else {
         setExecutionNote(
@@ -534,14 +748,16 @@ export function HomeScreen({
       setRouteHash(nextRouteHash);
       setExecutionNote(
         "route",
-        `Route submitted: ${formatHashLabel(nextRouteHash)}. Waiting for Base confirmation.`,
+        `Route submitted: ${formatHashLabel(nextRouteHash)}. Waiting for ${formatChainLabel(
+          executionChainId,
+        )} confirmation.`,
       );
 
-      if (!basePublicClient) {
-        throw new Error("Base public client is unavailable.");
+      if (!sourcePublicClient) {
+        throw new Error(`${formatChainLabel(executionChainId)} public client is unavailable.`);
       }
 
-      await basePublicClient.waitForTransactionReceipt({
+      await sourcePublicClient.waitForTransactionReceipt({
         hash: nextRouteHash,
       });
 
@@ -558,13 +774,9 @@ export function HomeScreen({
   };
 
   return (
-    <>
-      {isExecutionRunning ? (
-        <TransactionAnimation isTransacting={isExecutionRunning} />
-      ) : null}
-      <div className="px-4 py-5 lg:px-8 lg:py-7">
+    <div className="px-4 py-5 lg:px-8 lg:py-7">
         <div className="mx-auto max-w-[1400px] space-y-4">
-        <section className="relative overflow-visible py-0">
+        <section className="relative py-0">
           <div className="absolute right-0 top-0 h-56 w-56 rounded-full bg-[var(--color-accent)]/10 blur-3xl" />
           <div className="relative flex flex-col gap-5 md:flex-row md:items-end md:justify-between">
             <h1 className="pixel-hero-heading max-w-5xl">
@@ -593,6 +805,22 @@ export function HomeScreen({
               />
             </h1>
             <div className="flex w-full items-end justify-end gap-2 md:w-auto md:self-end">
+              <div className="group relative">
+                <span className="pixel-chip inline-flex cursor-default items-center bg-white/5 px-2 py-1 font-mono text-[9px] uppercase tracking-[0.18em] text-[var(--color-accent)]">
+                  Sponsor
+                </span>
+                <div className="absolute right-0 top-full z-20 mt-2 hidden min-w-[16rem] border border-white/10 bg-[var(--color-bg-elevated)]/95 p-3 text-left shadow-[0_10px_24px_rgba(0,0,0,0.35)] group-hover:block group-focus-within:block">
+                  <p className="font-mono text-[9px] uppercase tracking-[0.18em] text-zinc-500">
+                    Sponsor Balance (Ethereum)
+                  </p>
+                  <p className="mt-2 font-mono text-sm text-white">
+                    {sponsorBalanceLabel}
+                  </p>
+                  <p className="mt-2 truncate font-mono text-[10px] text-zinc-500">
+                    {sponsorAddress ?? "Address unavailable"}
+                  </p>
+                </div>
+              </div>
               <span
                 aria-hidden="true"
                 className="pointer-events-none flex shrink-0 items-center justify-center"
@@ -610,8 +838,10 @@ export function HomeScreen({
           </div>
         </section>
 
+        <AssetInventory onSelectionChange={handleAssetSelectionChange} />
+
         <section className="grid gap-5 md:grid-cols-[4fr_6fr]">
-          <section className="panel-frame bg-[var(--color-bg-elevated)] p-6 md:p-5">
+          <section className="panel-frame bg-[var(--color-bg-elevated)] p-6 md:p-8">
             <div className="flex items-center gap-3">
               <Sparkles className="size-4 text-[var(--color-accent)]" />
               <p className="font-mono text-[10px] uppercase tracking-[0.24em] text-[var(--color-accent)]">
@@ -619,59 +849,43 @@ export function HomeScreen({
               </p>
             </div>
 
-            <div className="mt-3 flex flex-wrap items-start justify-between gap-4">
-              <div>
-                <p className=" font-[family-name:var(--font-display)] text-2xl font-semibold tracking-[-0.05em] text-white">
-                  USDC into USDC
-                </p>
-                <p className="mt-2 text-sm leading-7 text-zinc-400">
-                  {activeVaultName ?? "Awaiting vault"} on {activeProtocolName} /{" "}
-                  {activeNetwork}
-                </p>
-              </div>
+            <div className="mt-5 flex flex-wrap items-start justify-between gap-4">
+	              <div>
+	                <p className=" font-[family-name:var(--font-display)] text-2xl font-semibold tracking-[-0.05em] text-white">
+	                  {selectedAsset
+                      ? `${selectedAsset.amount} ${selectedAsset.tokenSymbol} into ${activeVaultName ?? "selected vault"}`
+                      : "Select an asset from inventory"}
+	                </p>
+	                <p className="mt-2 text-sm leading-7 text-zinc-400">
+	                  {selectedCompareItem
+                      ? `${activeProtocolName} / ${activeNetwork} / Target: ${selectedTargetAsset}`
+                      : "Choose a vault from the matrix to populate execution details."}
+	                </p>
+	              </div>
               <span className="pixel-chip bg-white/5 px-3 py-2 font-mono text-[10px] uppercase tracking-[0.18em] text-[var(--color-accent)]">
                 {routeStateLabel}
               </span>
             </div>
 
-            <div className="mt-6 grid gap-4 md:grid-cols-2">
-              <div className="space-y-4">
-                <InputBlock label="From Chain">
-                  <select
-                    value={chain.id}
-                    disabled
-                    className="recessed-input w-full px-4 py-4 font-[family-name:var(--font-display)] text-xl font-medium tracking-[-0.03em] text-white outline-none md:text-[1.25rem]"
-                  >
-                    <option value={chain.id} className="bg-[#111111]">
-                      {chain.label}
-                    </option>
-                  </select>
-                </InputBlock>
-
-                <InputBlock label="Token">
-                  <select
-                    value={tokenId}
-                    onChange={(event) => handleTokenChange(event.target.value)}
-                    className="recessed-input w-full px-4 py-4 font-[family-name:var(--font-display)] text-xl font-medium tracking-[-0.03em] text-white outline-none md:text-[1.25rem]"
-                  >
-                    {sourceTokens.map((option) => (
-                      <option key={option.id} value={option.id} className="bg-[#111111]">
-                        {option.label}
-                      </option>
-                    ))}
-                  </select>
-                </InputBlock>
-
-                <InputBlock label="Amount">
-                  <input
-                    inputMode="decimal"
-                    value={amountInput}
-                    onChange={(event) => handleAmountChange(event.target.value)}
-                    placeholder="0.02"
-                    className="recessed-input w-full px-4 py-4 font-[family-name:var(--font-display)] text-xl font-medium tracking-[-0.03em] text-white outline-none placeholder:text-zinc-600 md:text-[1.25rem]"
-                  />
-                </InputBlock>
-              </div>
+	            <div className="mt-6 grid gap-4 lg:grid-cols-[1.05fr_0.95fr]">
+	              <div className="space-y-4">
+	                <CommandMetric
+	                  label="Source Asset"
+	                  value={
+                      selectedAsset
+                        ? `${selectedAsset.amount} ${selectedAsset.tokenSymbol}`
+                        : "None"
+                    }
+	                />
+	                <CommandMetric
+	                  label="Source Chain"
+	                  value={selectedAsset ? formatChainLabel(selectedAsset.chainId) : "Select Asset"}
+	                />
+	                <CommandMetric
+	                  label="Target Vault"
+	                  value={selectedCompareItem?.label ?? "Select Vault"}
+	                />
+	              </div>
 
               <div className="space-y-4">
                 <CommandMetric
@@ -682,44 +896,48 @@ export function HomeScreen({
                   label="Break-even"
                   value={activeBreakEvenLabel}
                 />
-                <CommandMetric
-                  label="Live APY"
-                  value={`${activeApyPercent.toFixed(2)}%`}
-                />
-              </div>
-            </div>
+	                <CommandMetric
+	                  label="Live APY"
+	                  value={`${activeApyPercent.toFixed(2)}%`}
+	                />
+	                <CommandMetric
+	                  label="Est. Cost"
+	                  value={formatUsd(activeCostUsd)}
+	                />
+	              </div>
+	            </div>
 
-              <div className="mt-6 flex flex-col gap-3">
-                <Magnet
-                  padding={50}
-                  disabled={isPrimaryButtonDisabled}
-                  magnetStrength={50}
-                  wrapperClassName="w-full"
-                  innerClassName="w-full"
-                >
-                  <TerminalButton
-                    className="arcade-button w-full justify-center gap-3 py-4 text-[12px]"
-                    disabled={isPrimaryButtonDisabled}
-                    onClick={() => void handlePrimaryAction()}
-                  >
-                    {ctaLabel}
-                    {!isExecutionRunning && !isExecutionComplete ? (
-                      <ArrowRight className="size-4" />
-                    ) : null}
-                  </TerminalButton>
-                </Magnet>
-                <p className="text-center text-sm text-zinc-500">
-                  {evmAddress
-                    ? hasExecutableQuote
-                    ? "All critical numbers are already on screen. The next click only drives wallet confirmations."
-                    : "Connected. Waiting for the live Base quote to finish."
-                  : "Wallet connection is the only step before live quote generation."}
+            <div className="mt-6 flex flex-col gap-3">
+              <TerminalButton
+                className="w-full justify-center gap-3 py-4 text-[12px]"
+	                disabled={
+	                  !selectedAsset ||
+                    !selectedCompareItem ||
+                    amountValue <= 0 ||
+	                  isExecutionRunning ||
+	                  (Boolean(evmAddress) && !hasExecutableQuote && isQuoteLoading)
+	                }
+                onClick={() => void handlePrimaryAction()}
+              >
+                {ctaLabel}
+                {!isExecutionRunning && !isExecutionComplete ? (
+                  <ArrowRight className="size-4" />
+                ) : null}
+              </TerminalButton>
+              <p className="text-center text-sm text-zinc-500">
+	                {evmAddress
+	                  ? hasExecutableQuote
+	                    ? "All critical numbers are already on screen. The next click only drives wallet confirmations."
+	                    : selectedAsset && selectedCompareItem
+                        ? `Connected. Waiting for the live ${formatChainLabel(selectedAsset.chainId)} quote to finish.`
+                        : "Select one source asset and one vault to build the live quote."
+	                  : "Wallet connection is the only step before live quote generation."}
               </p>
             </div>
           </section>
 
           <section
-            className={`panel-frame bg-[var(--color-panel)] p-6 md:p-5 ${
+            className={`panel-frame bg-[var(--color-panel)] p-6 md:p-8 ${
               isVaultMatrixHighlighted ? "shadow-[var(--shadow-accent)]" : ""
             }`}
           >
@@ -732,20 +950,32 @@ export function HomeScreen({
                   Compare every recovery window on the page
                 </h2>
               </div>
-              <VaultIcon
-                activeVaultName={activeVaultName ?? "Awaiting vault"}
-                activeBreakEven={activeBreakEvenLabel}
-                activeApy={`${activeApyPercent.toFixed(2)}%`}
-                recoveryProgress={recoveryProgress24h}
-                vaultTokenAddress={activeVaultTokenAddress}
-                walletAddress={walletAddress}
-              />
+            </div>
+
+            <div className="mt-6 flex flex-wrap gap-2">
+              {availableVaultCategories.map((category) => (
+                <button
+                  key={category}
+                  className={`pixel-box bg-white/5 px-3 py-2 font-mono text-[9px] uppercase tracking-[0.16em] transition hover:border-[var(--color-accent)] hover:text-[var(--color-accent)] ${
+                    visibleVaultCategory === category
+                      ? "border-[var(--color-accent)] text-[var(--color-accent)]"
+                      : "text-zinc-500"
+                  }`}
+                  onClick={() => setActiveVaultCategory(category)}
+                  type="button"
+                >
+                  {vaultCategoryLabels[category]}
+                </button>
+              ))}
             </div>
 
             <div className="pixel-box mt-6 overflow-hidden bg-white/[0.02]">
-              <div className="hidden grid-cols-[1.7fr_0.95fr_1fr_0.8fr] gap-4 border-b border-white/8 bg-white/4 px-5 py-3 md:grid">
+              <div className="hidden grid-cols-[1.65fr_0.75fr_0.85fr_0.85fr_0.65fr] gap-4 border-b border-white/8 bg-white/4 px-5 py-3 md:grid">
                 <p className="font-mono text-[10px] uppercase tracking-[0.18em] text-zinc-500">
                   Name
+                </p>
+                <p className="font-mono text-[10px] uppercase tracking-[0.18em] text-zinc-500">
+                  APY
                 </p>
                 <p className="font-mono text-[10px] uppercase tracking-[0.18em] text-zinc-500">
                   Break-even
@@ -758,46 +988,62 @@ export function HomeScreen({
                 </p>
               </div>
 
-              {compareItems.map((item) => {
-                const isSelected = item.vaultAddress
-                  ? selectedVaultAddress === item.vaultAddress ||
-                    liveQuote?.selectedVault.address === item.vaultAddress
-                  : selectedProtocol === item.protocol;
+              <div className="max-h-[28rem] overflow-y-auto overscroll-contain">
+                {visibleCompareItems.map((item) => {
+                  const isSelected = item.vaultAddress
+                    ? selectedVaultAddress === item.vaultAddress ||
+                      liveQuote?.selectedVault.address === item.vaultAddress
+                    : selectedProtocol === item.protocol;
 
-                return (
-                  <button
-                    key={item.id}
-                    type="button"
-                    onClick={() => handleCompareSelection(item)}
-                    className={`w-full border-b border-white/8 px-5 py-4 text-left transition last:border-b-0 ${
-                      isSelected
-                        ? "bg-[var(--color-accent)]/6"
-                        : "border-white/10 bg-white/0 hover:bg-white/5"
-                    }`}
-                  >
-                    <div className="grid gap-3 md:grid-cols-[1.7fr_0.95fr_1fr_0.8fr] md:items-center">
-                      <CompareRowItem
-                        label="Name"
-                        value={item.label}
-                        className="font-[family-name:var(--font-display)] text-xl font-semibold tracking-[-0.04em] text-white"
-                      />
-                      <CompareRowItem
-                        label="Break-even"
-                        value={item.value}
-                      />
-                      <CompareRowItem
-                        label="Daily Yield"
-                        value={`${formatUsd(item.dailyYieldUsd)}/day`}
-                      />
-                      <CompareRowItem
-                        label="Source"
-                        value={item.isLive ? "LIVE" : "MODEL"}
-                        className="font-mono text-[11px] uppercase tracking-[0.18em] text-[var(--color-accent)]"
-                      />
-                    </div>
-                  </button>
-                );
-              })}
+                  return (
+                    <button
+                      key={item.id}
+                      type="button"
+                      onClick={() => handleCompareSelection(item)}
+                      className={`group w-full border-b border-white/8 px-5 py-3 text-left transition last:border-b-0 ${
+                        isSelected
+                          ? "bg-[var(--color-accent)]/8 shadow-[inset_2px_0_0_var(--color-accent)]"
+                          : "border-white/10 bg-white/0 hover:bg-white/[0.04]"
+                      }`}
+                    >
+                      <div className="grid gap-3 md:grid-cols-[1.65fr_0.75fr_0.85fr_0.85fr_0.65fr] md:items-center">
+                        <div className="min-w-0">
+                          <p className="font-[family-name:var(--font-display)] text-lg font-semibold tracking-[-0.04em] text-white">
+                            {item.label}
+                          </p>
+                          <p className="mt-1 truncate font-mono text-[10px] uppercase tracking-[0.16em] text-zinc-500">
+                            {item.protocol} / {item.targetChainId ? formatChainLabel(item.targetChainId) : "Model"}
+                          </p>
+                        </div>
+                        <CompareRowItem
+                          label="APY"
+                          value={deriveApyFromDailyYield(item)}
+                          className="font-mono text-sm text-[var(--color-accent)]"
+                        />
+                        <CompareRowItem
+                          label="Break-even"
+                          value={item.value}
+                          className="font-mono text-sm text-white"
+                        />
+                        <CompareRowItem
+                          label="Daily Yield"
+                          value={`${formatUsd(item.dailyYieldUsd)}/day`}
+                          className="font-mono text-sm text-white"
+                        />
+                        <CompareRowItem
+                          label="Source"
+                          value={item.isLive ? "LIVE" : "MODEL"}
+                          className={`inline-flex w-fit border px-2 py-1 font-mono text-[10px] uppercase tracking-[0.18em] ${
+                            item.isLive
+                              ? "border-[var(--color-accent)]/30 text-[var(--color-accent)]"
+                              : "border-white/10 text-zinc-500"
+                          }`}
+                        />
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
             </div>
             <div className="mt-6">
               <div className="mb-3 flex items-center justify-between font-mono text-[10px] uppercase tracking-[0.18em] text-zinc-500">
@@ -806,29 +1052,44 @@ export function HomeScreen({
                   {Math.round(recoveryProgress24h)}%
                 </span>
               </div>
-              <SegmentedProgressBar value={recoveryProgress24h} />
+              <div className="pixel-box h-4 overflow-hidden bg-white/8 p-0">
+                <div
+                  className="h-full bg-[var(--color-accent)] shadow-[var(--shadow-accent)]"
+                  style={{ width: `${recoveryProgress24h}%` }}
+                />
+              </div>
               {liveError ? (
                 <p className="mt-4 border border-[var(--color-danger)]/30 bg-[var(--color-danger)]/8 px-4 py-3 text-sm text-[var(--color-danger)]">
                   {liveError}
                 </p>
               ) : null}
+              {!liveError && vaultCatalogError ? (
+                <p className="mt-4 border border-[var(--color-danger)]/30 bg-[var(--color-danger)]/8 px-4 py-3 text-sm text-[var(--color-danger)]">
+                  {vaultCatalogError}
+                </p>
+              ) : null}
+              {isVaultCatalogLoading ? (
+                <p className="mt-4 font-mono text-[10px] uppercase tracking-[0.18em] text-zinc-500">
+                  Loading LI.FI Earn vault catalog...
+                </p>
+              ) : null}
             </div>
             </section>
-          </section>
-        </div>
+        </section>
       </div>
-    </>
-  );
-}
-
-function InputBlock({ label, children }: { label: string; children: ReactNode }) {
-  return (
-    <label className="block">
-      <span className="mb-3 block font-mono text-[10px] uppercase tracking-[0.18em] text-zinc-500">
-        {label}
-      </span>
-      {children}
-    </label>
+      <QuoteModal
+        preloadedBreakEvenDays={toFiniteNumberOrNull(activeBreakEvenDays)}
+        isOpen={isQuoteModalOpen}
+        onClose={() => setIsQuoteModalOpen(false)}
+        selections={assetSelections}
+        targetAsset={selectedTargetAsset}
+        targetChainId={selectedTargetChainId}
+        targetProtocol={activeProtocol}
+        targetVaultAddress={selectedVaultAddress ?? undefined}
+        vaultLabel={activeVaultName ?? "Selected Vault"}
+        vaultSubtitle={activeProtocolName ?? "Protocol"}
+      />
+    </div>
   );
 }
 
@@ -838,8 +1099,8 @@ function CommandMetric({ label, value }: { label: string; value: string }) {
       <p className="mb-3 block font-mono text-[10px] uppercase tracking-[0.18em] text-zinc-500">
         {label}
       </p>
-      <div className="recessed-slot flex min-h-[3.75rem] items-center px-4 py-4">
-        <p className="font-[family-name:var(--font-display)] text-xl font-medium leading-none tracking-[-0.03em] text-white md:text-[1.25rem]">
+      <div className="pixel-box flex min-h-[3.6rem] items-center bg-white/5 px-4 py-3">
+        <p className="font-[family-name:var(--font-display)] text-2xl font-semibold leading-none tracking-[-0.04em] text-white">
           {value}
         </p>
       </div>
@@ -878,8 +1139,86 @@ function parseBreakEvenLabel(value: string) {
   return value.includes("hours") ? number / 24 : number;
 }
 
+function parseUsdLabel(value: string) {
+  const parsed = Number.parseFloat(value.replace(/[$,+]/g, ""));
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function parsePercentLabel(value: string) {
+  const parsed = Number.parseFloat(value.replace("%", ""));
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function normalizeApyDecimal(value: number) {
+  if (!Number.isFinite(value) || value <= 0) {
+    return 0;
+  }
+
+  return value > 1 ? value / 100 : value;
+}
+
+function toFiniteNumberOrNull(value: number | null | undefined) {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function normalizeSourceTokenSymbol(symbol?: string): YieldPaySourceToken {
+  return symbol === "ETH" ||
+    symbol === "MATIC" ||
+    symbol === "BNB" ||
+    symbol === "AVAX"
+    ? symbol
+    : "USDC";
+}
+
+const vaultCategoryLabels: Record<VaultCategory, string> = {
+  "liquid-staking": "Liquid Staking",
+  lending: "Lending",
+  recommend: "Recommend",
+  staking: "Staking",
+  vaults: "Vaults",
+  yield: "Yield",
+};
+
+const vaultCategoryOrder: VaultCategory[] = [
+  "recommend",
+  "lending",
+  "vaults",
+  "liquid-staking",
+  "yield",
+  "staking",
+];
+
+function getAvailableVaultCategories(items: CompareItem[]) {
+  const categories = new Set<VaultCategory>();
+
+  for (const item of items) {
+    categories.add(getCompareItemCategory(item));
+  }
+
+  return vaultCategoryOrder.filter(
+    (category) => category === "recommend" || categories.has(category),
+  );
+}
+
+function getCompareItemCategory(item: CompareItem) {
+  return classifyVaultCategory(item.protocol);
+}
+
+function deriveApyFromDailyYield(item: CompareItem) {
+  const principal = 10_000;
+  const apy = (item.dailyYieldUsd * 365 * 100) / principal;
+
+  if (!Number.isFinite(apy) || apy <= 0) {
+    return "-";
+  }
+
+  return `${apy.toFixed(2)}%`;
+}
+
 function formatChainLabel(chainId: number) {
-  return chainId === base.id ? "Base (8453)" : `Chain ${chainId}`;
+  const matchedChain = sourceChains.find((chain) => chain.chainId === chainId);
+
+  return matchedChain ? `${matchedChain.label} (${chainId})` : `Chain ${chainId}`;
 }
 
 function formatExecutionError(error: unknown) {

@@ -4,6 +4,7 @@ import { useMemo, useRef, useState } from "react";
 
 import { SectionHeader } from "@/components/shared/section-header";
 import { StatusBadge } from "@/components/shared/status-badge";
+import { useVaultCatalog } from "@/hooks/use-vault-catalog";
 import { vaults } from "@/lib/mock-data";
 import type { Vault } from "@/lib/types";
 
@@ -14,10 +15,15 @@ export function DashboardScreen() {
   const rootRef = useRef<HTMLDivElement>(null);
   const [selectedVaultId, setSelectedVaultId] = useState<string | null>(null);
   const [originRect, setOriginRect] = useState<DOMRect | null>(null);
+  const {
+    error: vaultCatalogError,
+    isLoading: isVaultCatalogLoading,
+    vaults: liveVaults,
+  } = useVaultCatalog(vaults);
 
   const selectedVault = useMemo(
-    () => vaults.find((vault) => vault.id === selectedVaultId) ?? null,
-    [selectedVaultId],
+    () => liveVaults.find((vault) => vault.id === selectedVaultId) ?? null,
+    [liveVaults, selectedVaultId],
   );
 
   const handleSelect = (vault: Vault, rect: DOMRect) => {
@@ -81,10 +87,16 @@ export function DashboardScreen() {
           <SectionHeader
             eyebrow="Efficiency Ranking Board"
             title="Vault Surface"
-            detail="Live_Data / Sort_By: Velocity"
+            detail={
+              isVaultCatalogLoading
+                ? "Loading_LI.FI_Earn / Fallback_Ready"
+                : vaultCatalogError
+                  ? "Fallback_Data / LI.FI_Earn_Unavailable"
+                  : "LI.FI_Earn_Live / Sort_By: Velocity"
+            }
           />
           <VaultGrid
-            vaults={vaults}
+            vaults={liveVaults}
             selectedVaultId={selectedVaultId}
             onSelect={handleSelect}
           />

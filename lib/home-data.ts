@@ -1,17 +1,34 @@
-export type SourceChainId = "base";
-export type SourceTokenId = "usdc" | "eth";
+import { CHAINS, TOKENS } from "@/lib/constants";
+import type { Address } from "viem";
+
+export type SourceChainId =
+  | "base"
+  | "ethereum"
+  | "arbitrum"
+  | "optimism"
+  | "polygon"
+  | "bsc"
+  | "avalanche";
+export type SourceTokenId = "usdc" | "native";
+export type SourceTokenSymbol = "USDC" | "ETH" | "MATIC" | "BNB" | "AVAX";
 
 export type SourceChainOption = {
   id: SourceChainId;
+  chainId: number;
   label: string;
   costMultiplier: number;
+  nativeSymbol: Exclude<SourceTokenSymbol, "USDC">;
   routeNote: string;
 };
 
 export type SourceTokenOption = {
   id: SourceTokenId;
+  address: Address;
+  decimals: number;
+  isNative: boolean;
   label: string;
   costMultiplier: number;
+  symbol: SourceTokenSymbol;
 };
 
 export type HomeVaultOption = {
@@ -30,24 +47,98 @@ export type HomeVaultOption = {
 export const sourceChains: SourceChainOption[] = [
   {
     id: "base",
+    chainId: CHAINS.BASE,
     label: "Base",
     costMultiplier: 1,
-    routeNote: "Base faucet flow with Base-mainnet token addresses only.",
+    nativeSymbol: "ETH",
+    routeNote: "Shortest route to the Base vault set with low execution overhead.",
+  },
+  {
+    id: "ethereum",
+    chainId: CHAINS.ETHEREUM,
+    label: "Ethereum",
+    costMultiplier: 1.45,
+    nativeSymbol: "ETH",
+    routeNote: "Highest liquidity source chain, usually with the highest gas cost.",
+  },
+  {
+    id: "arbitrum",
+    chainId: CHAINS.ARBITRUM,
+    label: "Arbitrum",
+    costMultiplier: 1.12,
+    nativeSymbol: "ETH",
+    routeNote: "Low-cost ETH-native routing into the Base vault destination.",
+  },
+  {
+    id: "optimism",
+    chainId: CHAINS.OPTIMISM,
+    label: "Optimism",
+    costMultiplier: 1.1,
+    nativeSymbol: "ETH",
+    routeNote: "Another low-friction ETH-native source chain for Base-bound deposits.",
+  },
+  {
+    id: "polygon",
+    chainId: CHAINS.POLYGON,
+    label: "Polygon",
+    costMultiplier: 1.08,
+    nativeSymbol: "MATIC",
+    routeNote: "Cheap USDC and MATIC entry point when you want lower starting costs.",
+  },
+  {
+    id: "bsc",
+    chainId: CHAINS.BSC,
+    label: "BSC",
+    costMultiplier: 1.18,
+    nativeSymbol: "BNB",
+    routeNote: "Broad retail liquidity with slightly higher route variance into Base.",
+  },
+  {
+    id: "avalanche",
+    chainId: CHAINS.AVALANCHE,
+    label: "Avalanche",
+    costMultiplier: 1.16,
+    nativeSymbol: "AVAX",
+    routeNote: "Fast finality source chain with Base as the fixed destination vault layer.",
   },
 ];
 
-export const sourceTokens: SourceTokenOption[] = [
-  {
-    id: "usdc",
-    label: "USDC",
-    costMultiplier: 1,
-  },
-  {
-    id: "eth",
-    label: "ETH",
-    costMultiplier: 1.28,
-  },
-];
+const usdcAddressesByChainId: Record<SourceChainId, Address> = {
+  avalanche: TOKENS.USDC_AVAX as Address,
+  arbitrum: TOKENS.USDC_ARB as Address,
+  base: TOKENS.USDC_BASE as Address,
+  bsc: TOKENS.USDC_BSC as Address,
+  ethereum: TOKENS.USDC_ETH as Address,
+  optimism: TOKENS.USDC_OP as Address,
+  polygon: TOKENS.USDC_POL as Address,
+};
+
+export function getSourceChainOption(id: SourceChainId) {
+  return sourceChains.find((chain) => chain.id === id);
+}
+
+export function getSourceTokenOptions(chain: SourceChainOption): SourceTokenOption[] {
+  return [
+    {
+      id: "usdc",
+      address: usdcAddressesByChainId[chain.id],
+      decimals: 6,
+      isNative: false,
+      label: "USDC",
+      costMultiplier: 1,
+      symbol: "USDC",
+    },
+    {
+      id: "native",
+      address: TOKENS.ETH as Address,
+      decimals: 18,
+      isNative: true,
+      label: chain.nativeSymbol,
+      costMultiplier: 1.28,
+      symbol: chain.nativeSymbol,
+    },
+  ];
+}
 
 export const homeVaults: HomeVaultOption[] = [
   {

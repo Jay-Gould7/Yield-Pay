@@ -3,11 +3,13 @@
 import {
   createContext,
   useContext,
-  useState,
-  useSyncExternalStore,
   type PropsWithChildren,
 } from "react";
-import { useAccount, useConnect, useDisconnect } from "wagmi";
+import {
+  useAccountModal,
+  useConnectModal,
+} from "@rainbow-me/rainbowkit";
+import { useAccount, useDisconnect } from "wagmi";
 
 import { formatEvmAddress } from "./format";
 
@@ -16,11 +18,15 @@ type WalletUiContextValue = {
   evmAddress: string | null;
   evmConnectorName: string | null;
   evmLabel: string | null;
+  hasStaleInjectedConnection: boolean;
+  hasOkxProvider: boolean;
+  walletError: string | null;
   open: () => void;
   close: () => void;
   toggle: () => void;
   connectEvm: () => void;
   connectInjectedWallet: () => void;
+  connectWalletConnect: () => void;
   disconnectEvm: () => void;
 };
 
@@ -30,57 +36,47 @@ type WalletUiProviderProps = PropsWithChildren<{
   initialOpen?: boolean;
 }>;
 
-function subscribeToHydration() {
-  return () => undefined;
-}
-
-function useHasHydrated() {
-  return useSyncExternalStore(
-    subscribeToHydration,
-    () => true,
-    () => false,
-  );
-}
-
 export function WalletUiProvider({
   children,
-  initialOpen = false,
 }: WalletUiProviderProps) {
-  const [isOpen, setIsOpen] = useState(initialOpen);
-  const hasHydrated = useHasHydrated();
   const { address, connector, isConnected } = useAccount();
-  const { connect, connectors } = useConnect();
   const { disconnect } = useDisconnect();
+  const { openAccountModal } = useAccountModal();
+  const { openConnectModal } = useConnectModal();
 
-  const evmAddress = hasHydrated && isConnected ? address ?? null : null;
-  const evmConnectorName =
-    hasHydrated && isConnected ? connector?.name ?? null : null;
+  const evmAddress = isConnected ? address ?? null : null;
+  const evmConnectorName = isConnected ? connector?.name ?? null : null;
 
-  const connectWithType = (type: string, fallback?: string) => {
-    const primaryConnector = connectors.find((item) => item.type === type);
-    const fallbackConnector = fallback
-      ? connectors.find((item) => item.type === fallback)
-      : undefined;
-    const connectorToUse = primaryConnector ?? fallbackConnector ?? connectors[0];
-
-    if (connectorToUse) {
-      connect({ connector: connectorToUse });
-      setIsOpen(false);
+  const openWalletModal = () => {
+    if (isConnected) {
+      openAccountModal?.();
+      return;
     }
+
+    openConnectModal?.();
   };
 
   const value: WalletUiContextValue = {
-    isOpen,
+    isOpen: false,
     evmAddress,
     evmConnectorName,
     evmLabel: formatEvmAddress(evmAddress),
-    open: () => setIsOpen(true),
-    close: () => setIsOpen(false),
-    toggle: () => setIsOpen((current) => !current),
-    connectEvm: () => connectWithType("injected", "walletConnect"),
-    connectInjectedWallet: () => connectWithType("injected", "walletConnect"),
+    hasStaleInjectedConnection: false,
+    hasOkxProvider: false,
+    walletError: null,
+    open: openWalletModal,
+    close: () => undefined,
+    toggle: openWalletModal,
+    connectEvm: () => {
+      openConnectModal?.();
+    },
+    connectInjectedWallet: () => {
+      openConnectModal?.();
+    },
+    connectWalletConnect: () => {
+      openConnectModal?.();
+    },
     disconnectEvm: () => {
-      setIsOpen(false);
       disconnect();
     },
   };
@@ -90,6 +86,10 @@ export function WalletUiProvider({
       {children}
     </WalletUiContext.Provider>
   );
+}
+
+export function getWalletErrorMessage() {
+  return null;
 }
 
 export function useWalletUi() {

@@ -76,3 +76,32 @@ export function formatHoursUntilProfit(days: number) {
 
   return `${Math.max(1, Math.ceil(days * 24))} hours`;
 }
+
+export function deriveBreakEvenDaysFromYieldBasis({
+  amountUsd,
+  basisAmountUsd,
+  dailyYieldUsd,
+  estimatedCostUsd,
+}: {
+  amountUsd: number;
+  basisAmountUsd: number;
+  dailyYieldUsd: number;
+  estimatedCostUsd: number;
+}) {
+  if (
+    amountUsd <= 0 ||
+    basisAmountUsd <= 0 ||
+    dailyYieldUsd <= 0 ||
+    estimatedCostUsd < 0
+  ) {
+    return Number.POSITIVE_INFINITY;
+  }
+
+  const scaledDailyYieldUsd = dailyYieldUsd * (amountUsd / basisAmountUsd);
+
+  if (scaledDailyYieldUsd <= 0) {
+    return Number.POSITIVE_INFINITY;
+  }
+
+  return estimatedCostUsd / scaledDailyYieldUsd;
+}

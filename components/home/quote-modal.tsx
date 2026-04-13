@@ -13,6 +13,7 @@ import {
 } from "wagmi";
 
 import { config as wagmiConfig } from "@/app/config/wagmi";
+import LetterGlitch from "@/components/LetterGlitch";
 import type { AssetQuoteSelection } from "@/components/home/asset-inventory";
 import { HoldingsModal } from "@/components/home/holdings-modal";
 import { useMultiYieldPay } from "@/hooks/use-multi-yield-pay";
@@ -27,6 +28,7 @@ type QuoteModalProps = {
   composerTargetTokenAddress?: string;
   isOpen: boolean;
   onClose: () => void;
+  preloadedBreakEvenDays?: number | null;
   selections: AssetQuoteSelection[];
   vaultLabel: string;
   vaultSubtitle: string;
@@ -52,6 +54,8 @@ type ExecutionState = {
 };
 
 const executionOrder: ExecutionStep[] = ["wallet", "quote", "approval", "route", "done"];
+const SPONSOR_MIN_BALANCE_WEI = "150000000000000";
+const SPONSOR_TARGET_BALANCE_WEI = "350000000000000";
 
 export function QuoteModal({
   composerTargetApyDecimal,
@@ -59,6 +63,7 @@ export function QuoteModal({
   composerTargetTokenAddress,
   isOpen,
   onClose,
+  preloadedBreakEvenDays,
   selections,
   vaultLabel,
   vaultSubtitle,
@@ -386,6 +391,51 @@ export function QuoteModal({
         await switchChainAsync({ chainId: executionChainId });
       }
 
+      const nativeBalance = await executionPublicClient.getBalance({
+        address: walletAddress,
+      });
+      const minBalanceWei = BigInt(SPONSOR_MIN_BALANCE_WEI);
+
+      if (nativeBalance < minBalanceWei) {
+        setExecution((current) => ({
+          ...current,
+          error: "Low source-chain gas detected. Requesting sponsored gas...",
+          runningStep: "wallet",
+        }));
+
+        const sponsorResponse = await fetch("/api/gas-sponsor", {
+          body: JSON.stringify({
+            chainId: executionChainId,
+            minBalanceWei: SPONSOR_MIN_BALANCE_WEI,
+            recipient: walletAddress,
+            targetBalanceWei: SPONSOR_TARGET_BALANCE_WEI,
+          }),
+          headers: {
+            "content-type": "application/json",
+          },
+          method: "POST",
+        });
+
+        const sponsorPayload = (await sponsorResponse.json()) as {
+          error?: string;
+          sponsored?: boolean;
+          txHash?: Hash;
+        };
+
+        if (!sponsorResponse.ok) {
+          throw new Error(
+            sponsorPayload.error ??
+              "Unable to sponsor source-chain gas. Please retry in a few seconds.",
+          );
+        }
+
+        if (sponsorPayload.sponsored && sponsorPayload.txHash) {
+          await executionPublicClient.waitForTransactionReceipt({
+            hash: sponsorPayload.txHash,
+          });
+        }
+      }
+
       setExecution((current) => ({
         ...current,
         runningStep: "quote",
@@ -579,17 +629,34 @@ export function QuoteModal({
     return null;
   }
 
+  const previewBreakEvenDays =
+    typeof preloadedBreakEvenDays === "number" && Number.isFinite(preloadedBreakEvenDays)
+      ? preloadedBreakEvenDays
+      : null;
+
   return (
     <div
-      className="fixed inset-0 z-[90] bg-black/70 backdrop-blur-md"
+      className="fixed inset-0 z-[90] overflow-hidden bg-black/70 backdrop-blur-md"
       onClick={onClose}
       role="presentation"
     >
+      <div className="pointer-events-none absolute inset-0 opacity-150">
+        <LetterGlitch
+          centerVignette
+          className="h-full w-full"
+          glitchColors={["#00ff9d", "#ece7df", "#8d928b"]}
+          glitchSpeed={150}
+          outerVignette
+          smooth
+        />
+      </div>
+      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top,rgba(0,0,0,0.16),rgba(0,0,0,0.76)_64%)]" />
+
       <div className="flex min-h-screen items-center justify-center px-4 py-6 md:px-8">
         <section
           aria-labelledby="quote-modal-title"
           aria-modal="true"
-          className="panel-frame flex h-[calc(100vh-3rem)] w-full max-w-4xl flex-col overflow-hidden bg-[var(--color-panel)] shadow-[0_0_60px_rgba(164,255,185,0.08)]"
+          className="panel-frame relative z-10 flex h-[calc(100vh-3rem)] w-full max-w-4xl flex-col overflow-hidden bg-[var(--color-panel)] shadow-[0_0_60px_rgba(164,255,185,0.08)]"
           onClick={(event) => event.stopPropagation()}
           role="dialog"
         >
@@ -696,6 +763,8 @@ export function QuoteModal({
                           : "-"
                       : data
                         ? formatBreakEvenWindow(data.breakEvenDays)
+                        : previewBreakEvenDays !== null
+                          ? formatBreakEvenWindow(previewBreakEvenDays)
                         : isLoading
                           ? "..."
                           : "-"

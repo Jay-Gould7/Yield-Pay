@@ -367,12 +367,36 @@ const Shuffle: React.FC<ShuffleProps> = ({
         setReady(true);
       };
 
+      const isElementInView = () => {
+        const rect = el.getBoundingClientRect();
+        const viewportHeight = window.innerHeight || document.documentElement.clientHeight;
+        const viewportWidth = window.innerWidth || document.documentElement.clientWidth;
+
+        return (
+          rect.bottom > 0 &&
+          rect.right > 0 &&
+          rect.top < viewportHeight &&
+          rect.left < viewportWidth
+        );
+      };
+
+      let started = false;
+      const startIfNeeded = () => {
+        if (started) return;
+        started = true;
+        create();
+      };
+
       const st = ScrollTrigger.create({
         trigger: el,
         start,
         once: triggerOnce,
-        onEnter: create
+        onEnter: startIfNeeded
       });
+
+      if (isElementInView()) {
+        startIfNeeded();
+      }
 
       return () => {
         st.kill();

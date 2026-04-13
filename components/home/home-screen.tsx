@@ -187,6 +187,7 @@ export function HomeScreen({
     liveQuote?.totalFeesUsd ?? selectedFallbackOutcome?.estimate.estimatedCostUsd ?? 0;
   const activeBreakEvenDays =
     liveQuote?.breakEvenDays ?? selectedFallbackOutcome?.estimate.breakEvenDays ?? 0;
+  const activeBreakEvenLabel = formatBreakEvenWindow(activeBreakEvenDays);
   const activeDailyYieldUsd =
     liveQuote?.principalUsd && liveQuote?.apyDecimal
       ? liveQuote.principalUsd * (liveQuote.apyDecimal / 365)
@@ -558,7 +559,8 @@ export function HomeScreen({
                 <span className="pixel-hero-line">for itself in</span>
               </span>
               <Shuffle
-                text={formatBreakEvenWindow(activeBreakEvenDays)}
+                key={activeBreakEvenLabel}
+                text={activeBreakEvenLabel}
                 tag="span"
                 className="pixel-hero-shuffle"
                 shuffleDirection="up"
@@ -595,7 +597,7 @@ export function HomeScreen({
         </section>
 
         <section className="grid gap-5 md:grid-cols-[4fr_6fr]">
-          <section className="panel-frame bg-[var(--color-bg-elevated)] p-6 md:p-8">
+          <section className="panel-frame bg-[var(--color-bg-elevated)] p-6 md:p-5">
             <div className="flex items-center gap-3">
               <Sparkles className="size-4 text-[var(--color-accent)]" />
               <p className="font-mono text-[10px] uppercase tracking-[0.24em] text-[var(--color-accent)]">
@@ -603,7 +605,7 @@ export function HomeScreen({
               </p>
             </div>
 
-            <div className="mt-5 flex flex-wrap items-start justify-between gap-4">
+            <div className="mt-3 flex flex-wrap items-start justify-between gap-4">
               <div>
                 <p className=" font-[family-name:var(--font-display)] text-2xl font-semibold tracking-[-0.05em] text-white">
                   USDC into USDC
@@ -624,7 +626,7 @@ export function HomeScreen({
                   <select
                     value={chain.id}
                     disabled
-                    className="pixel-box w-full bg-white/5 px-4 py-4 text-sm text-white outline-none"
+                    className="pixel-box w-full bg-white/5 px-4 py-4 font-[family-name:var(--font-display)] text-xl font-medium tracking-[-0.03em] text-white outline-none md:text-[1.25rem]"
                   >
                     <option value={chain.id} className="bg-[#111111]">
                       {chain.label}
@@ -636,7 +638,7 @@ export function HomeScreen({
                   <select
                     value={tokenId}
                     onChange={(event) => handleTokenChange(event.target.value)}
-                    className="pixel-box w-full bg-white/5 px-4 py-4 text-sm text-white outline-none transition focus:border-[var(--color-accent)]"
+                    className="pixel-box w-full bg-white/5 px-4 py-4 font-[family-name:var(--font-display)] text-xl font-medium tracking-[-0.03em] text-white outline-none transition focus:border-[var(--color-accent)] md:text-[1.25rem]"
                   >
                     {sourceTokens.map((option) => (
                       <option key={option.id} value={option.id} className="bg-[#111111]">
@@ -652,7 +654,7 @@ export function HomeScreen({
                     value={amountInput}
                     onChange={(event) => handleAmountChange(event.target.value)}
                     placeholder="0.02"
-                    className="pixel-box w-full bg-white/5 px-4 py-4 text-sm text-white outline-none transition placeholder:text-zinc-600 focus:border-[var(--color-accent)]"
+                    className="pixel-box w-full bg-white/5 px-4 py-4 font-[family-name:var(--font-display)] text-xl font-medium tracking-[-0.03em] text-white outline-none transition placeholder:text-zinc-600 focus:border-[var(--color-accent)] md:text-[1.25rem]"
                   />
                 </InputBlock>
               </div>
@@ -664,7 +666,7 @@ export function HomeScreen({
                 />
                 <CommandMetric
                   label="Break-even"
-                  value={formatBreakEvenWindow(activeBreakEvenDays)}
+                  value={activeBreakEvenLabel}
                 />
                 <CommandMetric
                   label="Live APY"
@@ -673,13 +675,13 @@ export function HomeScreen({
               </div>
             </div>
 
-            <div className="mt-6 flex flex-col gap-3">
-              <TerminalButton
-                className="w-full justify-center gap-3 py-4 text-[12px]"
-                disabled={
-                  amountValue <= 0 ||
-                  isExecutionRunning ||
-                  (Boolean(evmAddress) && !hasExecutableQuote && isQuoteLoading)
+              <div className="mt-6 flex flex-col gap-3">
+                <TerminalButton
+                  className="arcade-button w-full justify-center gap-3 py-4 text-[12px]"
+                  disabled={
+                    amountValue <= 0 ||
+                    isExecutionRunning ||
+                    (Boolean(evmAddress) && !hasExecutableQuote && isQuoteLoading)
                 }
                 onClick={() => void handlePrimaryAction()}
               >
@@ -699,7 +701,7 @@ export function HomeScreen({
           </section>
 
           <section
-            className={`panel-frame bg-[var(--color-panel)] p-6 md:p-8 ${
+            className={`panel-frame bg-[var(--color-panel)] p-6 md:p-5 ${
               isVaultMatrixHighlighted ? "shadow-[var(--shadow-accent)]" : ""
             }`}
           >
@@ -815,7 +817,7 @@ function CommandMetric({ label, value }: { label: string; value: string }) {
         {label}
       </p>
       <div className="pixel-box flex min-h-[3.6rem] items-center bg-white/5 px-4 py-3">
-        <p className="font-[family-name:var(--font-display)] text-2xl font-semibold leading-none tracking-[-0.04em] text-white">
+        <p className="font-[family-name:var(--font-display)] text-xl font-medium leading-none tracking-[-0.03em] text-white md:text-[1.25rem]">
           {value}
         </p>
       </div>

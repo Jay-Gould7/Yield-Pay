@@ -7,6 +7,7 @@ import { useEffect, useState } from "react";
 
 import "@/app/config/lifi";
 import { supportedChains } from "@/app/config/wagmi";
+import { sourceChains } from "@/lib/home-data";
 
 type WalletAsset = {
   address: string;
@@ -67,8 +68,11 @@ const amountFormatter = new Intl.NumberFormat("en-US", {
   maximumFractionDigits: 4,
 });
 
-const supportedChainNameById = new Map<number, string>(
+const configuredChainNameById = new Map<number, string>(
   supportedChains.map((chain) => [chain.id, chain.name]),
+);
+const preferredChainNameById = new Map<number, string>(
+  sourceChains.map((chain) => [chain.chainId, chain.label]),
 );
 
 function formatUsd(value: number) {
@@ -166,7 +170,9 @@ export function useWalletAssets(): UseWalletAssetsResult {
               assets,
               chainId: numericChainId,
               chainName:
-                supportedChainNameById.get(numericChainId) ?? `Chain ${numericChainId}`,
+                preferredChainNameById.get(numericChainId) ??
+                configuredChainNameById.get(numericChainId) ??
+                `Chain ${numericChainId}`,
               totalUsd,
             } satisfies WalletAssetGroup;
           })

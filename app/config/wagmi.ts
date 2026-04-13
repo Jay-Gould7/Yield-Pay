@@ -1,132 +1,12 @@
-import { http, createConfig, type Transport } from 'wagmi'
-import {
-  mainnet,
-  polygon,
-  optimism,
-  arbitrum,
-  base,
-  arbitrumNova,
-  avalanche,
-  bsc,
-  celo,
-  cronos,
-  fantom,
-  fuse,
-  gnosis,
-  linea,
-  mantle,
-  metis,
-  moonbeam,
-  moonriver,
-  zkSync,
-  scroll,
-  blast,
-  mode,
-  berachain,
-  sonic,
-  unichain,
-  fraxtal,
-  immutableZkEvm,
-  bob,
-  aurora,
-  xdc,
-  flare,
-  telos,
-  viction,
-  taiko,
-  abstract,
-  etherlink,
-  evmos,
-  gravity,
-  hemi,
-  hyperEvm,
-  ink,
-  klaytn,
-  lens,
-  lisk,
-  megaeth,
-  monad,
-  morph,
-  opBNB,
-  plumeMainnet,
-  polygonZkEvm,
-  rootstock,
-  superposition,
-  swellchain,
-  vana,
-  velas,
-  worldchain,
-  xLayer,
-} from 'wagmi/chains'
-import { injected, walletConnect } from 'wagmi/connectors'
+import { createConfig, http } from "wagmi";
+import { injected, walletConnect } from "wagmi/connectors";
+import { base } from "wagmi/chains";
 
-const projectId = process.env.NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID
+const projectId = process.env.NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID;
+const BASE_RPC_URL = "https://mainnet.base.org";
 
-// 53 Major EVM chains supported by LI.FI - focused on mainnets for hackathon
-const supportedChains = [
-  // Base first for faucet-first onboarding
-  base,
-  // Ethereum ecosystem core
-  mainnet,
-  polygon,
-  arbitrum,
-  optimism,
-  arbitrumNova,
-  // Major L2s & Alt-L1s
-  avalanche,
-  bsc,
-  celo,
-  cronos,
-  fantom,
-  fuse,
-  gnosis,
-  linea,
-  mantle,
-  metis,
-  moonbeam,
-  moonriver,
-  zkSync,
-  scroll,
-  // Emerging L2s
-  blast,
-  mode,
-  berachain,
-  sonic,
-  unichain,
-  fraxtal,
-  immutableZkEvm,
-  // Other chains
-  bob,
-  aurora,
-  xdc,
-  flare,
-  telos,
-  viction,
-  taiko,
-  abstract,
-  etherlink,
-  evmos,
-  gravity,
-  hemi,
-  hyperEvm,
-  ink,
-  klaytn,
-  lens,
-  lisk,
-  megaeth,
-  monad,
-  morph,
-  opBNB,
-  plumeMainnet,
-  polygonZkEvm,
-  rootstock,
-  superposition,
-  swellchain,
-  vana,
-  velas,
-  worldchain,
-  xLayer,
-] as const
+// Yield-Pay currently executes and reads vault state on Base only.
+const supportedChains = [base] as const;
 
 export const config = createConfig({
   chains: supportedChains,
@@ -134,11 +14,11 @@ export const config = createConfig({
     injected(),
     ...(projectId ? [walletConnect({ projectId })] : []),
   ],
-  transports: Object.fromEntries(
-    supportedChains.map((chain) => [chain.id, http()])
-  ) as unknown as Record<SupportedChainId, Transport>,
-})
+  transports: {
+    [base.id]: http(BASE_RPC_URL),
+  },
+});
 
-export { supportedChains }
+export { supportedChains };
 
-export type SupportedChainId = (typeof supportedChains)[number]['id']
+export type SupportedChainId = (typeof supportedChains)[number]["id"];

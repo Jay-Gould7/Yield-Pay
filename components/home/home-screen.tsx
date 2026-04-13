@@ -24,7 +24,11 @@ import { base } from "wagmi/chains";
 
 import { useYieldPay } from "@/hooks/useYieldPay";
 import { RetroTV } from "@/components/icons/retro-tv";
+import { VaultIcon } from "@/components/home/VaultIcon";
+import Magnet from "@/components/rb/Magnet";
 import Shuffle from "@/components/rb/Shuffle";
+import { SegmentedProgressBar } from "@/components/shared/SegmentedProgressBar";
+import { TransactionAnimation } from "@/components/shared/TransactionAnimation";
 import { TerminalButton } from "@/components/shared/terminal-button";
 import { ConnectWalletButton } from "@/components/wallet/connect-wallet-button";
 import {
@@ -194,6 +198,8 @@ export function HomeScreen({
       : selectedFallbackOutcome?.estimate.dailyYieldUsd ?? 0;
   const activePrincipalUsd =
     liveQuote?.principalUsd ?? amountValue;
+  const activeVaultTokenAddress =
+    liveQuote?.selectedVault.address ?? selectedVaultAddress ?? undefined;
   const recoveryProgress24h =
     activeCostUsd > 0 ? Math.min(100, (activeDailyYieldUsd / activeCostUsd) * 100) : 0;
   const hasExecutableQuote = Boolean(liveQuote?.transactionRequest);
@@ -237,6 +243,10 @@ export function HomeScreen({
         : isQuoteLoading
           ? "Building"
           : "Pending";
+  const isPrimaryButtonDisabled =
+    amountValue <= 0 ||
+    isExecutionRunning ||
+    (Boolean(evmAddress) && !hasExecutableQuote && isQuoteLoading);
   const isVaultMatrixHighlighted = initialCompareOpen || Boolean(selectedVaultAddress);
 
   const resetExecutionState = () => {
@@ -548,9 +558,13 @@ export function HomeScreen({
   };
 
   return (
-    <div className="px-4 py-5 lg:px-8 lg:py-7">
+    <>
+      {isExecutionRunning ? (
+        <TransactionAnimation isTransacting={isExecutionRunning} />
+      ) : null}
+      <div className="px-4 py-5 lg:px-8 lg:py-7">
         <div className="mx-auto max-w-[1400px] space-y-4">
-        <section className="relative overflow-hidden py-0">
+        <section className="relative overflow-visible py-0">
           <div className="absolute right-0 top-0 h-56 w-56 rounded-full bg-[var(--color-accent)]/10 blur-3xl" />
           <div className="relative flex flex-col gap-5 md:flex-row md:items-end md:justify-between">
             <h1 className="pixel-hero-heading max-w-5xl">
@@ -620,13 +634,13 @@ export function HomeScreen({
               </span>
             </div>
 
-            <div className="mt-6 grid gap-4 lg:grid-cols-[1.05fr_0.95fr]">
+            <div className="mt-6 grid gap-4 md:grid-cols-2">
               <div className="space-y-4">
                 <InputBlock label="From Chain">
                   <select
                     value={chain.id}
                     disabled
-                    className="pixel-box w-full bg-white/5 px-4 py-4 font-[family-name:var(--font-display)] text-xl font-medium tracking-[-0.03em] text-white outline-none md:text-[1.25rem]"
+                    className="recessed-input w-full px-4 py-4 font-[family-name:var(--font-display)] text-xl font-medium tracking-[-0.03em] text-white outline-none md:text-[1.25rem]"
                   >
                     <option value={chain.id} className="bg-[#111111]">
                       {chain.label}
@@ -638,7 +652,7 @@ export function HomeScreen({
                   <select
                     value={tokenId}
                     onChange={(event) => handleTokenChange(event.target.value)}
-                    className="pixel-box w-full bg-white/5 px-4 py-4 font-[family-name:var(--font-display)] text-xl font-medium tracking-[-0.03em] text-white outline-none transition focus:border-[var(--color-accent)] md:text-[1.25rem]"
+                    className="recessed-input w-full px-4 py-4 font-[family-name:var(--font-display)] text-xl font-medium tracking-[-0.03em] text-white outline-none md:text-[1.25rem]"
                   >
                     {sourceTokens.map((option) => (
                       <option key={option.id} value={option.id} className="bg-[#111111]">
@@ -654,7 +668,7 @@ export function HomeScreen({
                     value={amountInput}
                     onChange={(event) => handleAmountChange(event.target.value)}
                     placeholder="0.02"
-                    className="pixel-box w-full bg-white/5 px-4 py-4 font-[family-name:var(--font-display)] text-xl font-medium tracking-[-0.03em] text-white outline-none transition placeholder:text-zinc-600 focus:border-[var(--color-accent)] md:text-[1.25rem]"
+                    className="recessed-input w-full px-4 py-4 font-[family-name:var(--font-display)] text-xl font-medium tracking-[-0.03em] text-white outline-none placeholder:text-zinc-600 md:text-[1.25rem]"
                   />
                 </InputBlock>
               </div>
@@ -676,23 +690,27 @@ export function HomeScreen({
             </div>
 
               <div className="mt-6 flex flex-col gap-3">
-                <TerminalButton
-                  className="arcade-button w-full justify-center gap-3 py-4 text-[12px]"
-                  disabled={
-                    amountValue <= 0 ||
-                    isExecutionRunning ||
-                    (Boolean(evmAddress) && !hasExecutableQuote && isQuoteLoading)
-                }
-                onClick={() => void handlePrimaryAction()}
-              >
-                {ctaLabel}
-                {!isExecutionRunning && !isExecutionComplete ? (
-                  <ArrowRight className="size-4" />
-                ) : null}
-              </TerminalButton>
-              <p className="text-center text-sm text-zinc-500">
-                {evmAddress
-                  ? hasExecutableQuote
+                <Magnet
+                  padding={50}
+                  disabled={isPrimaryButtonDisabled}
+                  magnetStrength={50}
+                  wrapperClassName="w-full"
+                  innerClassName="w-full"
+                >
+                  <TerminalButton
+                    className="arcade-button w-full justify-center gap-3 py-4 text-[12px]"
+                    disabled={isPrimaryButtonDisabled}
+                    onClick={() => void handlePrimaryAction()}
+                  >
+                    {ctaLabel}
+                    {!isExecutionRunning && !isExecutionComplete ? (
+                      <ArrowRight className="size-4" />
+                    ) : null}
+                  </TerminalButton>
+                </Magnet>
+                <p className="text-center text-sm text-zinc-500">
+                  {evmAddress
+                    ? hasExecutableQuote
                     ? "All critical numbers are already on screen. The next click only drives wallet confirmations."
                     : "Connected. Waiting for the live Base quote to finish."
                   : "Wallet connection is the only step before live quote generation."}
@@ -714,6 +732,14 @@ export function HomeScreen({
                   Compare every recovery window on the page
                 </h2>
               </div>
+              <VaultIcon
+                activeVaultName={activeVaultName ?? "Awaiting vault"}
+                activeBreakEven={activeBreakEvenLabel}
+                activeApy={`${activeApyPercent.toFixed(2)}%`}
+                recoveryProgress={recoveryProgress24h}
+                vaultTokenAddress={activeVaultTokenAddress}
+                walletAddress={walletAddress}
+              />
             </div>
 
             <div className="pixel-box mt-6 overflow-hidden bg-white/[0.02]">
@@ -780,12 +806,7 @@ export function HomeScreen({
                   {Math.round(recoveryProgress24h)}%
                 </span>
               </div>
-              <div className="pixel-box h-4 overflow-hidden bg-white/8 p-0">
-                <div
-                  className="h-full bg-[var(--color-accent)] shadow-[var(--shadow-accent)]"
-                  style={{ width: `${recoveryProgress24h}%` }}
-                />
-              </div>
+              <SegmentedProgressBar value={recoveryProgress24h} />
               {liveError ? (
                 <p className="mt-4 border border-[var(--color-danger)]/30 bg-[var(--color-danger)]/8 px-4 py-3 text-sm text-[var(--color-danger)]">
                   {liveError}
@@ -795,9 +816,10 @@ export function HomeScreen({
             </section>
           </section>
         </div>
-    </div>
-    );
-  }
+      </div>
+    </>
+  );
+}
 
 function InputBlock({ label, children }: { label: string; children: ReactNode }) {
   return (
@@ -816,7 +838,7 @@ function CommandMetric({ label, value }: { label: string; value: string }) {
       <p className="mb-3 block font-mono text-[10px] uppercase tracking-[0.18em] text-zinc-500">
         {label}
       </p>
-      <div className="pixel-box flex min-h-[3.6rem] items-center bg-white/5 px-4 py-3">
+      <div className="recessed-slot flex min-h-[3.75rem] items-center px-4 py-4">
         <p className="font-[family-name:var(--font-display)] text-xl font-medium leading-none tracking-[-0.03em] text-white md:text-[1.25rem]">
           {value}
         </p>

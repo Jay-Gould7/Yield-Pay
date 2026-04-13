@@ -1,5 +1,7 @@
 "use client";
 
+import { AnimatePresence, motion } from "framer-motion";
+
 import { useWalletUi } from "@/lib/wallet/ui-context";
 
 export function ConnectWalletPopover() {
@@ -12,75 +14,91 @@ export function ConnectWalletPopover() {
     disconnectEvm,
   } = useWalletUi();
 
-  if (!isOpen) {
-    return null;
-  }
-
   return (
-    <div className="absolute right-0 top-full z-10 mt-3 w-72 border border-white/10 bg-[#161616] p-4 shadow-2xl">
-      <div className="flex items-start justify-between gap-3">
-        <div>
-          <p className="font-mono text-[10px] uppercase tracking-[0.22em] text-[var(--color-accent)]">
-            Wallet access
-          </p>
-          <p className="mt-2 text-sm text-zinc-400">
-            Connect an external wallet to get the live Base quote and execute the route.
-          </p>
-        </div>
-        <button
-          type="button"
-          onClick={close}
-          aria-label="Close wallet selector"
-          className="text-xs uppercase tracking-[0.2em] text-zinc-500 transition hover:text-white"
+    <AnimatePresence>
+      {isOpen ? (
+        <motion.div
+          className="wallet-popover-frame technical-grid absolute right-0 top-[calc(100%+0.65rem)] z-[180] w-[min(88vw,23rem)] overflow-hidden p-4 md:p-5"
+          initial={{ opacity: 0, scale: 0.96, y: -8 }}
+          animate={{ opacity: 1, scale: 1, y: 0 }}
+          exit={{ opacity: 0, scale: 0.98, y: -6 }}
+          transition={{ duration: 0.18, ease: "easeOut" }}
         >
-          x
-        </button>
-      </div>
-      <div className="mt-4 grid gap-3">
-        {evmLabel ? (
-          <>
-            <div className="border border-white/10 bg-white/5 px-3 py-3 text-left">
-              <p className="font-mono text-[10px] uppercase tracking-[0.18em] text-[var(--color-accent)]">
-                Wallet Active
+          <div className="flex items-start justify-between gap-4">
+            <div>
+              <p className="wallet-popover-title text-[11px] uppercase text-white">
+                Wallet Access
               </p>
-              <p className="mt-2 font-mono text-[11px] uppercase tracking-[0.18em] text-[var(--color-text)]">
-                {evmLabel}
-              </p>
-              <p className="mt-2 text-xs text-zinc-500">
-                {evmConnectorName ?? "Wallet connected"}
+              <p className="mt-2 font-mono text-[10px] uppercase tracking-[0.22em] text-[var(--color-accent)]">
+                Base Execution Gateway
               </p>
             </div>
             <button
               type="button"
-              onClick={disconnectEvm}
-              className="border border-white/10 px-3 py-3 text-left font-mono text-[11px] uppercase tracking-[0.18em] text-[var(--color-accent)]"
+              onClick={close}
+              aria-label="Close wallet selector"
+              className="wallet-popover-close pixel-box grid size-9 place-items-center bg-white/5 font-mono text-[11px] uppercase text-zinc-300 transition hover:text-white"
             >
-              Disconnect wallet
+              X
             </button>
-          </>
-        ) : (
-          <>
-            <button
-              type="button"
-              onClick={connectInjectedWallet}
-              className="border border-[var(--color-accent)]/30 bg-[var(--color-accent)]/8 px-3 py-3 text-left"
-            >
-              <p className="font-mono text-[10px] uppercase tracking-[0.18em] text-[var(--color-accent)]">
-                Connect
+          </div>
+
+          
+          
+          
+          
+
+          <div className="mt-5 grid gap-3">
+            {evmLabel ? (
+              <>
+                <div className="pixel-box bg-white/4 px-4 py-4 text-left">
+                  <p className="font-mono text-[10px] uppercase tracking-[0.18em] text-[var(--color-accent)]">
+                    Wallet Active
+                  </p>
+                  <p className="mt-3 font-mono text-[12px] uppercase tracking-[0.18em] text-[var(--color-text)]">
+                    {evmLabel}
+                  </p>
+                  <p className="mt-2 text-sm text-zinc-500">
+                    {evmConnectorName ?? "Wallet connected"}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={disconnectEvm}
+                  className="wallet-popover-action pixel-box bg-white/4 px-4 py-4 text-left font-mono text-[11px] uppercase tracking-[0.18em] text-[var(--color-accent)]"
+                >
+                  Disconnect Wallet
+                </button>
+              </>
+            ) : (
+              <button
+                type="button"
+                onClick={connectInjectedWallet}
+                className="wallet-popover-action wallet-popover-connect pixel-box px-4 py-4 text-left"
+              >
+                <p className="font-mono text-[10px] uppercase tracking-[0.18em] text-[#042415]">
+                  Connect
+                </p>
+                <p className="mt-3 font-mono text-[12px] uppercase tracking-[0.18em] text-[#031b11]">
+                  Connect Wallet
+                </p>
+                <p className="mt-2 text-sm leading-6 text-[#083523]">
+                  MetaMask, Rabby, Coinbase Wallet, or WalletConnect-compatible flows.
+                </p>
+              </button>
+            )}
+
+            <div className="pixel-box border-dashed bg-white/0 px-4 py-4 text-left">
+              <p className="font-mono text-[10px] uppercase tracking-[0.18em] text-zinc-500">
+                Secondary Access
               </p>
-              <p className="mt-2 font-mono text-[11px] uppercase tracking-[0.18em] text-[var(--color-text)]">
-                Connect Wallet
+              <p className="mt-3 font-mono text-[11px] uppercase tracking-[0.18em] text-zinc-400">
+                Solana Coming Later
               </p>
-              <p className="mt-2 text-xs text-zinc-500">
-                Uses MetaMask, Rabby, Coinbase Wallet, or another injected / WalletConnect flow.
-              </p>
-            </button>
-          </>
-        )}
-        <div className="border border-dashed border-white/10 px-3 py-3 text-left font-mono text-[11px] uppercase tracking-[0.18em] text-zinc-500">
-          Solana coming later
-        </div>
-      </div>
-    </div>
+            </div>
+          </div>
+        </motion.div>
+      ) : null}
+    </AnimatePresence>
   );
 }
